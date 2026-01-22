@@ -10,6 +10,30 @@
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/components/navbar.css') }}" />
+    <style>
+      .avatar-header-image {
+        width: 240px;
+        height: 240px;
+        border-radius: 8px;
+        object-fit: cover;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+      }
+
+      .player-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      @media (max-width: 768px) {
+        .avatar-header-image {
+          width: 160px;
+          height: 160px;
+        }
+      }
+    </style>
   </head>
   <body>
     {% include 'components/navbar.html' %}
@@ -23,6 +47,7 @@
             <h1 class="player-name" id="avatar-name">Loading...</h1>
             <div class="player-elo" id="avatar-stats"></div>
           </div>
+          <img id="avatar-image" class="avatar-header-image" style="display: none;" alt="Avatar" />
         </div>
 
         <!-- Overall Stats -->
@@ -92,6 +117,54 @@
 
     <script>
       const avatarName = "{{ avatar_name }}";
+
+      // Map avatar names to image files (fuzzy matching)
+      function getAvatarImagePath(avatarName) {
+        // Dynamically populated list of available image files from server
+        const availableImages = {{ avatar_image_files | tojson }};
+
+        // Normalize avatar name for matching
+        const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const normalizedName = normalize(avatarName);
+
+        // Try exact match first (normalized)
+        for (const img of availableImages) {
+          const imgBase = img.replace(/\.(png|jpg|jpeg)$/i, ""); // remove extension
+          if (normalize(imgBase) === normalizedName) {
+            return img;
+          }
+        }
+
+        // Try contains match (avatar name in filename)
+        for (const img of availableImages) {
+          const imgBase = img.replace(/\.(png|jpg|jpeg)$/i, "");
+          if (normalize(imgBase).includes(normalizedName)) {
+            return img;
+          }
+        }
+
+        // Try reverse contains (filename in avatar name)
+        for (const img of availableImages) {
+          const imgBase = img.replace(/\.(png|jpg|jpeg)$/i, "");
+          const normalizedImg = normalize(imgBase);
+          if (normalizedName.includes(normalizedImg)) {
+            return img;
+          }
+        }
+
+        return null;
+      }
+
+      // Load avatar image if available
+      function loadAvatarImage() {
+        const imagePath = getAvatarImagePath(avatarName);
+        const avatarImg = document.getElementById('avatar-image');
+
+        if (imagePath && avatarImg) {
+          avatarImg.src = `/avatar-images/${imagePath}`;
+          avatarImg.style.display = 'block';
+        }
+      }
 
       async function fetchAvatarData() {
         try {
@@ -189,6 +262,8 @@
         }
       }
 
+      // Load data and image when page loads
+      loadAvatarImage();
       fetchAvatarData();
     </script>
 

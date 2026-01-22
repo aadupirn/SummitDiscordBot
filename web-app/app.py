@@ -412,13 +412,47 @@ def deck_help():
     return render_template("pages/deck_help.html")
 
 
+def extract_event_date(folder_name, event_name):
+    """Extract date from event folder name or event name. Returns (year, month) tuple or (0, 0) if no date found."""
+    import re
+
+    # Try to find year (4 digits)
+    year_match = re.search(r'(20\d{2})', folder_name + " " + event_name)
+    year = int(year_match.group(1)) if year_match else 0
+
+    # Try to find month (common patterns)
+    month = 0
+    text = (folder_name + " " + event_name).lower()
+    month_names = {
+        'january': 1, 'jan': 1,
+        'february': 2, 'feb': 2,
+        'march': 3, 'mar': 3,
+        'april': 4, 'apr': 4,
+        'may': 5,
+        'june': 6, 'jun': 6,
+        'july': 7, 'jul': 7,
+        'august': 8, 'aug': 8,
+        'september': 9, 'sep': 9, 'sept': 9,
+        'october': 10, 'oct': 10,
+        'november': 11, 'nov': 11,
+        'december': 12, 'dec': 12
+    }
+
+    for month_name, month_num in month_names.items():
+        if month_name in text:
+            month = month_num
+            break
+
+    return (year, month)
+
+
 @app.route("/top-8")
 def top_8():
     """Top 8 decks by event page - lists all events"""
     events = []
 
     if TOP_8_DIR.exists():
-        for folder in sorted(TOP_8_DIR.iterdir(), reverse=True):
+        for folder in TOP_8_DIR.iterdir():
             if folder.is_dir():
                 # Look for JSON files in the folder
                 json_files = list(folder.glob("*.json"))
@@ -443,18 +477,25 @@ def top_8():
                         with open(json_path, "r", encoding="utf-8") as f:
                             data = json.load(f)
                             player_count = len(data)
+                            event_name = format_event_name(folder.name)
+                            year, month = extract_event_date(folder.name, event_name)
 
                             events.append(
                                 {
                                     "folder": folder.name,
-                                    "name": format_event_name(folder.name),
+                                    "name": event_name,
                                     "player_count": player_count,
                                     "has_top8": top8_json is not None,
                                     "has_full": full_json is not None,
+                                    "year": year,
+                                    "month": month,
                                 }
                             )
                     except Exception as e:
                         print(f"Error loading {json_path}: {e}")
+
+    # Sort events: newest first (by year, then month), events without dates last
+    events.sort(key=lambda e: (e['year'] == 0, -e['year'], -e['month']))
 
     return render_template("pages/top_8.html", events=events)
 
@@ -784,7 +825,18 @@ def avatar_profile(avatar_name):
     from urllib.parse import unquote
 
     avatar_name = unquote(avatar_name)
-    return render_template("pages/avatar.html", avatar_name=avatar_name)
+
+    # Get list of avatar image files
+    avatar_imgs_dir = os.path.join(app.root_path, "templates", "avatar_imgs")
+    avatar_image_files = []
+    if os.path.exists(avatar_imgs_dir):
+        avatar_image_files = [
+            f
+            for f in os.listdir(avatar_imgs_dir)
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+
+    return render_template("pages/avatar.html", avatar_name=avatar_name, avatar_image_files=avatar_image_files)
 
 
 # Avatar API endpoint
