@@ -13,6 +13,7 @@ from cogs.slash_commands import SlashCommandsCog
 from cogs.anti_spam import AntiSpamCog
 from cogs.purchase_tracking import PurchaseTrackingCog
 from cogs.rules_assistant import RulesAssistantCog
+from cogs.setup import SetupCog
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -127,6 +128,7 @@ async def on_member_join(member):
 
 async def setup_cogs():
     await bot.add_cog(AntiSpamCog(bot))  # Load anti-spam first to monitor all messages
+    await bot.add_cog(SetupCog(bot))  # Server setup for multi-server support
     await bot.add_cog(LFGCog(bot))
     await bot.add_cog(EloCog(bot))
     await bot.add_cog(FunCog(bot))

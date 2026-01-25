@@ -67,6 +67,12 @@ def create_db():
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Add guild_id column for multi-server support
+    try:
+        cur.execute("ALTER TABLE match_records ADD COLUMN guild_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Create solo_match_reports table with auto-increment report_id
     cur.execute("""CREATE TABLE IF NOT EXISTS solo_match_reports
                    (report_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +108,12 @@ def create_challenge_db():
                     match_comment TEXT,
                     json_deck_data TEXT
                    )""")
+
+    # Add guild_id column for multi-server support
+    try:
+        cur.execute("ALTER TABLE challenge_matches ADD COLUMN guild_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
 
     conn.commit()
     conn.close()
@@ -213,6 +225,7 @@ async def winner_report(
     match_comment,
     interaction_user_id,
     interaction_global,
+    guild_id=None,
     winner_deck_url=None,
     loser_deck_url=None,
 ):
@@ -253,8 +266,8 @@ async def winner_report(
         "INSERT INTO match_records (reporter_id, winner_id, winner_display_name, "
         "losser_id, losser_display_name, did_win, timestamp, first_player, match_time, "
         "curiosa_url, curiosa_url_winner, curiosa_url_loser, match_comment, "
-        "json_deck_data, json_deck_data_winner, json_deck_data_loser, winner_elo_change, loser_elo_change) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "json_deck_data, json_deck_data_winner, json_deck_data_loser, winner_elo_change, loser_elo_change, guild_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             reporter_id,
             user_id,
@@ -274,6 +287,7 @@ async def winner_report(
             json_deck_data_loser,
             winner_elo_change,
             loser_elo_change,
+            guild_id,
         ),
     )
 
@@ -297,6 +311,7 @@ async def losser_report(
     match_comment,
     interaction_user_id,
     interaction_global,
+    guild_id=None,
     winner_deck_url=None,
     loser_deck_url=None,
 ):
@@ -339,8 +354,8 @@ async def losser_report(
         "INSERT INTO match_records (reporter_id, winner_id, winner_display_name, "
         "losser_id, losser_display_name, did_win, timestamp, first_player, match_time, "
         "curiosa_url, curiosa_url_winner, curiosa_url_loser, match_comment, "
-        "json_deck_data, json_deck_data_winner, json_deck_data_loser, winner_elo_change, loser_elo_change) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "json_deck_data, json_deck_data_winner, json_deck_data_loser, winner_elo_change, loser_elo_change, guild_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             reporter_id,
             user_id,
@@ -360,6 +375,7 @@ async def losser_report(
             json_deck_data_loser,
             winner_elo_change,
             loser_elo_change,
+            guild_id,
         ),
     )
 
@@ -397,7 +413,11 @@ def check_milestone(match_id):
 
 
 async def save_challenge_match(
-    challenger_id: int, challenged_id: int, status: str, winner_id: int = None
+    challenger_id: int,
+    challenged_id: int,
+    status: str,
+    winner_id: int = None,
+    guild_id: int = None,
 ):
     """
     Save a challenge match to the database.
@@ -407,6 +427,7 @@ async def save_challenge_match(
         challenged_id: ID of the player who was challenged
         status: Match status ('pending', 'completed', 'declined', 'cancelled')
         winner_id: ID of the winning player (if match is completed)
+        guild_id: ID of the guild where the match occurred
     """
     # Ensure the challenge_matches table exists, then open a connection directly.
     create_challenge_db()
@@ -416,11 +437,11 @@ async def save_challenge_match(
     try:
         cursor.execute(
             """
-            INSERT INTO challenge_matches 
-            (challenger_id, challenged_id, status, match_time, winner_id) 
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+            INSERT INTO challenge_matches
+            (challenger_id, challenged_id, status, match_time, winner_id, guild_id)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
         """,
-            (challenger_id, challenged_id, status, winner_id),
+            (challenger_id, challenged_id, status, winner_id, guild_id),
         )
         conn.commit()
     except Exception as e:

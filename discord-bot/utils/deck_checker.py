@@ -2,8 +2,10 @@ import requests
 import json
 import os
 import time
+
 try:
     import certifi
+
     _REQUESTS_VERIFY = certifi.where()
 except Exception:
     _REQUESTS_VERIFY = True

@@ -15,6 +15,15 @@ from utils.database import (
     check_milestone,
 )
 from utils.constants import SORCERY_NICKNAMES
+from utils.server_config import (
+    get_server_config,
+    get_channel_for_guild,
+    is_summit_server,
+    get_embed_footer,
+    SUMMIT_GUILD_ID,
+    SUMMIT_CHANNELS,
+    SUMMIT_DISCORD_INVITE,
+)
 
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
 
@@ -51,7 +60,7 @@ def generate_milestone_message(count: int) -> str:
 
 
 async def send_milestone_announcement(
-    bot, winner_id: int, loser_id: int, match_id: int
+    bot, winner_id: int, loser_id: int, match_id: int, guild_id: int = None
 ):
     """
     Check if we hit a milestone and send an announcement if so.
@@ -61,11 +70,16 @@ async def send_milestone_announcement(
         winner_id: The ID of the winning player
         loser_id: The ID of the losing player
         match_id: The match ID that was just recorded
+        guild_id: The guild ID where the match was played
     """
     milestone = check_milestone(match_id)
     if milestone:
         try:
-            channel = bot.get_channel(MILESTONE_ANNOUNCEMENT_CHANNEL_ID)
+            # Get milestone channel from server config, fall back to Summit default
+            channel_id = get_channel_for_guild(guild_id, "milestone") if guild_id else MILESTONE_ANNOUNCEMENT_CHANNEL_ID
+            if not channel_id:
+                channel_id = MILESTONE_ANNOUNCEMENT_CHANNEL_ID
+            channel = bot.get_channel(channel_id)
             if channel:
                 # Generate message from ChatGPT and replace placeholders with actual mentions
                 message = generate_milestone_message(milestone)
@@ -75,17 +89,24 @@ async def send_milestone_announcement(
                 logger.info(f"Sent milestone announcement for {milestone} matches!")
             else:
                 logger.warning(
-                    f"Could not find milestone channel {MILESTONE_ANNOUNCEMENT_CHANNEL_ID}"
+                    f"Could not find milestone channel {channel_id}"
                 )
         except Exception as e:
             logger.error(f"Error sending milestone announcement: {e}")
 
 
-# In-memory LFG queue (user_id: {timestamp, timeframe, deck_url})
-lfg_queue = {}
+# In-memory LFG queue - per-server (guild_id: {user_id: {timestamp, timeframe, deck_url}})
+lfg_queues = {}
 
 # Lock to prevent race conditions when accessing the queue
 lfg_queue_lock = asyncio.Lock()
+
+
+def get_guild_queue(guild_id: int) -> dict:
+    """Get the LFG queue for a specific guild."""
+    if guild_id not in lfg_queues:
+        lfg_queues[guild_id] = {}
+    return lfg_queues[guild_id]
 
 # Track pending match reports awaiting confirmation
 # Key: (reporter_id, opponent_id), Value: match report data
@@ -132,7 +153,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
     )
 
     def __init__(
-        self, winner_id, winner_global, loser_id, loser_global, is_winner, bot
+        self, winner_id, winner_global, loser_id, loser_global, is_winner, bot, guild_id=None
     ):
         super().__init__()
         self.winner_id = winner_id
@@ -141,6 +162,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
         self.loser_global = loser_global
         self.is_winner = is_winner
         self.bot = bot
+        self.guild_id = guild_id or SUMMIT_GUILD_ID
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -172,6 +194,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
                 match_comment,
                 interaction_user_id,
                 interaction_global,
+                guild_id=self.guild_id,
                 winner_deck_url=curiosa_link,
                 loser_deck_url=None,
             )
@@ -189,6 +212,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
                 match_comment,
                 interaction_user_id,
                 interaction_global,
+                guild_id=self.guild_id,
                 winner_deck_url=None,
                 loser_deck_url=curiosa_link,
             )
@@ -201,7 +225,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
         # Check for milestone and send announcement if needed
         if self.bot:
             await send_milestone_announcement(
-                self.bot, self.winner_id, self.loser_id, match_id
+                self.bot, self.winner_id, self.loser_id, match_id, self.guild_id
             )
 
 
@@ -228,6 +252,7 @@ class MatchConfirmationButtons(discord.ui.View):
         opponent_global: str = None,
         winner_deck_url: str = None,
         loser_deck_url: str = None,
+        guild_id: int = None,
     ):
         super().__init__(timeout=86400)  # 24 hour timeout - plenty of time to confirm
         self.reporter_id = reporter_id
@@ -248,6 +273,7 @@ class MatchConfirmationButtons(discord.ui.View):
         self.match_comment = match_comment
         self.winner_deck_url = winner_deck_url
         self.loser_deck_url = loser_deck_url
+        self.guild_id = guild_id or SUMMIT_GUILD_ID
 
     @discord.ui.button(
         label="Confirm",
@@ -333,6 +359,7 @@ class MatchConfirmationButtons(discord.ui.View):
             combined_comment,  # Include both decks in comment
             self.winner_id,  # interaction_user_id
             self.winner_global,  # interaction_global
+            guild_id=self.guild_id,
             winner_deck_url=self.winner_deck_url,
             loser_deck_url=self.loser_deck_url,
         )
@@ -376,11 +403,11 @@ class MatchConfirmationButtons(discord.ui.View):
         # Update leaderboard in designated channel
         lfg_cog = self.bot.get_cog("LFGCog")
         if lfg_cog:
-            await lfg_cog.update_leaderboard()
+            await lfg_cog.update_leaderboard(self.guild_id)
 
         # Check for milestone and send announcement if needed
         await send_milestone_announcement(
-            self.bot, self.winner_id, self.loser_id, match_id
+            self.bot, self.winner_id, self.loser_id, match_id, self.guild_id
         )
 
     @discord.ui.button(
@@ -919,11 +946,11 @@ class ConfirmerDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
         # Update leaderboard
         lfg_cog = view.bot.get_cog("LFGCog")
         if lfg_cog:
-            await lfg_cog.update_leaderboard()
+            await lfg_cog.update_leaderboard(view.guild_id)
 
         # Check for milestone
         await send_milestone_announcement(
-            view.bot, view.winner_id, view.loser_id, match_id
+            view.bot, view.winner_id, view.loser_id, match_id, view.guild_id
         )
 
 
@@ -988,26 +1015,30 @@ class DeckURLModal(discord.ui.Modal, title="Join LFG Queue"):
             )
             return
 
+        # Get guild-specific queue
+        guild_id = interaction.guild.id
+        guild_queue = get_guild_queue(guild_id)
+
         # Use lock to prevent race conditions
         async with lfg_queue_lock:
             # Check if user is already in queue
-            if interaction.user.id in lfg_queue:
+            if interaction.user.id in guild_queue:
                 await interaction.followup.send(
                     "You're already in the queue!", ephemeral=True
                 )
                 return
 
             # Check for a match
-            lfg_cog.clean_expired_lfg()
+            lfg_cog.clean_expired_lfg(guild_id)
             matched_user_id = lfg_cog.check_if_someone_is_lfg(ctx)
 
             if matched_user_id and matched_user_id != interaction.user.id:
                 # Get matched user's deck URL before removing from queue
-                matched_user_deck_url = lfg_queue.get(matched_user_id, {}).get(
+                matched_user_deck_url = guild_queue.get(matched_user_id, {}).get(
                     "deck_url"
                 )
                 # Remove matched user from queue
-                lfg_queue.pop(matched_user_id, None)
+                guild_queue.pop(matched_user_id, None)
                 logger.info(
                     f"Lock acquired: Matching {interaction.user.id} with {matched_user_id}"
                 )
@@ -1019,7 +1050,7 @@ class DeckURLModal(discord.ui.Modal, title="Join LFG Queue"):
         if matched_user_id:
             # Match found!
             matched_user = await self.bot.fetch_user(matched_user_id)
-            lfg_channel = self.bot.get_channel(lfg_cog.lfg_channel_id)
+            lfg_channel = lfg_cog.get_lfg_channel(guild_id)
             joiner_global = (
                 interaction.user.global_name or interaction.user.display_name
             )
@@ -1150,7 +1181,9 @@ class DeckURLModal(discord.ui.Modal, title="Join LFG Queue"):
         else:
             # Add to queue with deck URL
             async with lfg_queue_lock:
-                if interaction.user.id in lfg_queue:
+                # Re-check guild queue inside lock
+                guild_queue = get_guild_queue(guild_id)
+                if interaction.user.id in guild_queue:
                     await interaction.followup.send(
                         "You're already in the queue!", ephemeral=True
                     )
@@ -1964,8 +1997,11 @@ class JoinQueueButton(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         """Handle join queue button click - shows the deck URL modal"""
+        # Get the guild-specific queue
+        guild_queue = get_guild_queue(interaction.guild.id)
+
         # Check if user is already in queue before showing modal
-        if interaction.user.id in lfg_queue:
+        if interaction.user.id in guild_queue:
             await interaction.response.send_message(
                 "You're already in the queue!", ephemeral=True
             )
@@ -1979,10 +2015,33 @@ class JoinQueueButton(discord.ui.View):
 class LFGCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.lfg_channel_id = 1336912830867439676
         self.check_expired_queue.start()  # Start the background task
         self.cleanup_old_status_messages.start()  # Clean up old messages on startup
         self.cleanup_old_leaderboard_messages.start()  # Clean up old leaderboard on startup
+
+    def get_lfg_channel_id(self, guild_id: int) -> int:
+        """Get the LFG channel ID for a guild."""
+        channel_id = get_channel_for_guild(guild_id, "lfg")
+        return channel_id if channel_id else SUMMIT_CHANNELS.get("lfg")
+
+    def get_lfg_channel(self, guild_id: int):
+        """Get the LFG channel for a guild."""
+        channel_id = self.get_lfg_channel_id(guild_id)
+        return self.bot.get_channel(channel_id) if channel_id else None
+
+    def get_leaderboard_channel(self, guild_id: int):
+        """Get the leaderboard channel for a guild."""
+        channel_id = get_channel_for_guild(guild_id, "leaderboard")
+        if not channel_id:
+            channel_id = SUMMIT_CHANNELS.get("leaderboard")
+        return self.bot.get_channel(channel_id) if channel_id else None
+
+    def get_milestone_channel(self, guild_id: int):
+        """Get the milestone channel for a guild."""
+        channel_id = get_channel_for_guild(guild_id, "milestone")
+        if not channel_id:
+            channel_id = SUMMIT_CHANNELS.get("milestone")
+        return self.bot.get_channel(channel_id) if channel_id else None
 
     def cog_unload(self):
         """Clean up when cog is unloaded"""
@@ -1994,9 +2053,10 @@ class LFGCog(commands.Cog):
     async def cleanup_old_status_messages(self):
         """One-time cleanup of old status messages on bot startup"""
         try:
-            lfg_channel = self.bot.get_channel(self.lfg_channel_id)
+            # Clean up Summit server's LFG channel
+            lfg_channel = self.get_lfg_channel(SUMMIT_GUILD_ID)
             if not lfg_channel:
-                logger.warning(f"LFG channel {self.lfg_channel_id} not found")
+                logger.warning(f"LFG channel for Summit not found")
                 return
 
             # Fetch recent messages (limit to last 50 messages to avoid rate limits)
@@ -2032,13 +2092,11 @@ class LFGCog(commands.Cog):
     async def cleanup_old_leaderboard_messages(self):
         """One-time cleanup of old leaderboard messages on bot startup"""
         try:
-            leaderboard_channel_id = 1457113321118629889
-            leaderboard_channel = self.bot.get_channel(leaderboard_channel_id)
+            # Clean up Summit server's leaderboard channel
+            leaderboard_channel = self.get_leaderboard_channel(SUMMIT_GUILD_ID)
 
             if not leaderboard_channel:
-                logger.warning(
-                    f"Leaderboard channel {leaderboard_channel_id} not found"
-                )
+                logger.warning("Leaderboard channel for Summit not found")
                 return
 
             # Fetch recent messages (limit to last 50 messages to avoid rate limits)
@@ -2057,8 +2115,8 @@ class LFGCog(commands.Cog):
                     except Exception as e:
                         logger.warning(f"Could not delete old leaderboard message: {e}")
 
-            # After cleanup, create a new leaderboard
-            await self.update_leaderboard()
+            # After cleanup, create a new leaderboard for Summit
+            await self.update_leaderboard(SUMMIT_GUILD_ID)
             logger.info("Old leaderboard messages cleaned up and new one created")
 
         except Exception as e:
@@ -2069,17 +2127,20 @@ class LFGCog(commands.Cog):
         """Wait for bot to be ready before cleanup"""
         await self.bot.wait_until_ready()
 
-    async def update_leaderboard(self):
-        """Update the leaderboard in the designated channel"""
+    async def update_leaderboard(self, guild_id: int = None):
+        """Update the leaderboard in the designated channel for a guild"""
         import sqlite3
 
         global leaderboard_message_id
 
-        leaderboard_channel_id = 1457113321118629889
-        leaderboard_channel = self.bot.get_channel(leaderboard_channel_id)
+        # Default to Summit if no guild specified
+        if guild_id is None:
+            guild_id = SUMMIT_GUILD_ID
+
+        leaderboard_channel = self.get_leaderboard_channel(guild_id)
 
         if not leaderboard_channel:
-            logger.warning(f"Leaderboard channel {leaderboard_channel_id} not found")
+            logger.warning(f"Leaderboard channel for guild {guild_id} not found")
             return
 
         try:
@@ -2182,16 +2243,19 @@ class LFGCog(commands.Cog):
     async def check_expired_queue(self):
         """Background task to check for expired queue entries every minute"""
         try:
-            initial_count = len(lfg_queue)
-            self.clean_expired_lfg()
-            final_count = len(lfg_queue)
+            # Check all guild queues
+            for guild_id in list(lfg_queues.keys()):
+                guild_queue = lfg_queues[guild_id]
+                initial_count = len(guild_queue)
+                self.clean_expired_lfg(guild_id)
+                final_count = len(guild_queue)
 
-            # If someone was removed, update the status message
-            if initial_count != final_count:
-                logger.info(
-                    f"Auto-removed {initial_count - final_count} expired queue entries"
-                )
-                await self.update_lfg_status()
+                # If someone was removed, update the status message for that guild
+                if initial_count != final_count:
+                    logger.info(
+                        f"Auto-removed {initial_count - final_count} expired queue entries for guild {guild_id}"
+                    )
+                    await self.update_lfg_status(guild_id)
 
             # Clean up old processed matches (older than 1 hour)
             self.clean_expired_processed_matches()
@@ -2203,19 +2267,26 @@ class LFGCog(commands.Cog):
         """Wait for bot to be ready before starting the loop"""
         await self.bot.wait_until_ready()
 
-    async def update_lfg_status(self):
-        """Update the persistent LFG status message"""
+    async def update_lfg_status(self, guild_id: int = None):
+        """Update the persistent LFG status message for a guild"""
         global lfg_status_message_id
 
-        lfg_channel = self.bot.get_channel(self.lfg_channel_id)
+        # Default to Summit if no guild specified
+        if guild_id is None:
+            guild_id = SUMMIT_GUILD_ID
+
+        lfg_channel = self.get_lfg_channel(guild_id)
         if not lfg_channel:
             return
 
         # Clean expired entries first
-        self.clean_expired_lfg()
+        self.clean_expired_lfg(guild_id)
+
+        # Get guild-specific queue
+        guild_queue = get_guild_queue(guild_id)
 
         # Create embed based on queue status
-        if len(lfg_queue) == 0:
+        if len(guild_queue) == 0:
             # RED - Empty queue
             embed = discord.Embed(
                 title="🔴 LFG Queue Status",
@@ -2227,14 +2298,14 @@ class LFGCog(commands.Cog):
             # GREEN - Active queue
             embed = discord.Embed(
                 title="🟢 LFG Queue Status",
-                description=f"**{len(lfg_queue)} player(s) looking for a game!!**\n\nClick **Join Queue** button below to get matched!\nUse `!cancel` to leave the queue.",
+                description=f"**{len(guild_queue)} player(s) looking for a game!!**\n\nClick **Join Queue** button below to get matched!\nUse `!cancel` to leave the queue.",
                 color=discord.Color.green(),
             )
 
             # Add details for each player in queue
             now = datetime.datetime.now()
             queue_details = []
-            for user_id, info in lfg_queue.items():
+            for user_id, info in guild_queue.items():
                 time_elapsed = (now - info["timestamp"]).total_seconds() / 60
                 time_remaining = info["timeframe"] - time_elapsed
 
@@ -2252,6 +2323,11 @@ class LFGCog(commands.Cog):
                 )
 
             embed.set_footer(text="Status updates automatically")
+
+        # Add Summit branding for non-Summit servers
+        footer_text = get_embed_footer(guild_id)
+        if footer_text:
+            embed.set_footer(text=f"Status updates automatically\n\n{footer_text}")
 
         # Create the Join Queue button view
         view = JoinQueueButton(self.bot)
@@ -2504,7 +2580,10 @@ class LFGCog(commands.Cog):
         oldest_valid_match = None
         oldest_timestamp = None
 
-        for user_id, info in lfg_queue.items():
+        # Get guild-specific queue
+        guild_queue = get_guild_queue(ctx.guild.id)
+
+        for user_id, info in guild_queue.items():
             if user_id == ctx.author.id:
                 continue
 
@@ -2530,7 +2609,9 @@ class LFGCog(commands.Cog):
         return oldest_valid_match
 
     def add_to_lfg_queue(self, ctx, timeframe, deck_url=None):
-        lfg_queue[ctx.author.id] = {
+        # Get guild-specific queue
+        guild_queue = get_guild_queue(ctx.guild.id)
+        guild_queue[ctx.author.id] = {
             "timestamp": datetime.datetime.now(),
             "timeframe": int(timeframe),
             "deck_url": deck_url,
@@ -2538,27 +2619,45 @@ class LFGCog(commands.Cog):
 
     def pair_players(self, ctx):
         now = datetime.datetime.now()
-        for user_id, info in lfg_queue.items():
+        # Get guild-specific queue
+        guild_queue = get_guild_queue(ctx.guild.id)
+        for user_id, info in guild_queue.items():
             if (
                 user_id != ctx.author.id
                 and (now - info["timestamp"]).total_seconds() < info["timeframe"] * 60
             ):
                 matched_user_id = user_id
-                lfg_queue.pop(matched_user_id, None)
-                lfg_queue.pop(ctx.author.id, None)
+                guild_queue.pop(matched_user_id, None)
+                guild_queue.pop(ctx.author.id, None)
                 logger.info(f"Pairing {matched_user_id} with {ctx.author.id}")
                 return matched_user_id
         return None
 
-    def clean_expired_lfg(self):
+    def clean_expired_lfg(self, guild_id: int = None):
+        """Clean expired LFG entries for a specific guild or all guilds."""
         now = datetime.datetime.now()
-        expired = [
-            user_id
-            for user_id, info in lfg_queue.items()
-            if (now - info["timestamp"]).total_seconds() > info["timeframe"] * 60
-        ]
-        for user_id in expired:
-            lfg_queue.pop(user_id)
+
+        if guild_id:
+            # Clean specific guild's queue
+            guild_queue = get_guild_queue(guild_id)
+            expired = [
+                user_id
+                for user_id, info in guild_queue.items()
+                if (now - info["timestamp"]).total_seconds() > info["timeframe"] * 60
+            ]
+            for user_id in expired:
+                guild_queue.pop(user_id)
+        else:
+            # Clean all guild queues
+            for gid in list(lfg_queues.keys()):
+                guild_queue = lfg_queues[gid]
+                expired = [
+                    user_id
+                    for user_id, info in guild_queue.items()
+                    if (now - info["timestamp"]).total_seconds() > info["timeframe"] * 60
+                ]
+                for user_id in expired:
+                    guild_queue.pop(user_id)
 
     def clean_expired_processed_matches(self):
         """Remove processed match entries older than 1 hour to prevent memory growth"""
@@ -2590,8 +2689,11 @@ class LFGCog(commands.Cog):
         except Exception as e:
             logger.warning(f"Could not delete command message: {e}")
 
+        # Get guild-specific queue
+        guild_queue = get_guild_queue(ctx.guild.id)
+
         # Check if user is already in queue
-        if ctx.author.id in lfg_queue:
+        if ctx.author.id in guild_queue:
             try:
                 await ctx.author.send(
                     "You're already in the queue! Use `!cancel` to leave the queue if needed."
@@ -2661,10 +2763,13 @@ class LFGCog(commands.Cog):
         except Exception as e:
             logger.warning(f"Could not delete cancel command message: {e}")
 
+        # Get guild-specific queue
+        guild_queue = get_guild_queue(ctx.guild.id)
+
         async with lfg_queue_lock:
-            was_in_queue = ctx.author.id in lfg_queue
+            was_in_queue = ctx.author.id in guild_queue
             if was_in_queue:
-                lfg_queue.pop(ctx.author.id)
+                guild_queue.pop(ctx.author.id)
 
         if was_in_queue:
             # Send DM to user
@@ -2721,8 +2826,7 @@ class LFGCog(commands.Cog):
             await ctx.send("You cannot challenge a bot!")
             return
 
-        channel_id = 1336912830867439676
-        lfg_channel = self.bot.get_channel(channel_id)
+        lfg_channel = self.get_lfg_channel(ctx.guild.id)
 
         # Show modal to get challenger's deck URL
         modal = ChallengerDeckModal(
@@ -3060,6 +3164,7 @@ class LFGCog(commands.Cog):
                 "Match reported by admin",  # match_comment
                 winner.id,  # interaction_user_id
                 winner_name,  # interaction_global
+                guild_id=ctx.guild.id,
                 winner_deck_url=None,
                 loser_deck_url=None,
             )
@@ -3068,10 +3173,10 @@ class LFGCog(commands.Cog):
             update_elo_db(loser.id, loser_name, False, winner.id)
 
             # Update leaderboard
-            await self.update_leaderboard()
+            await self.update_leaderboard(ctx.guild.id)
 
             # Check for milestone and send announcement if needed
-            await send_milestone_announcement(self.bot, winner.id, loser.id, match_id)
+            await send_milestone_announcement(self.bot, winner.id, loser.id, match_id, ctx.guild.id)
 
             # Send confirmation
             success_embed = discord.Embed(
@@ -3158,7 +3263,7 @@ class LFGCog(commands.Cog):
             conn.close()
 
             # Update leaderboard
-            await self.update_leaderboard()
+            await self.update_leaderboard(ctx.guild.id)
 
             # Send confirmation
             if old_elo is not None:
@@ -3454,7 +3559,7 @@ class LFGCog(commands.Cog):
             match_conn.close()
 
             # Update leaderboard
-            await self.update_leaderboard()
+            await self.update_leaderboard(ctx.guild.id)
 
             # Send confirmation
             success_embed = discord.Embed(
@@ -3603,7 +3708,7 @@ class LFGCog(commands.Cog):
             match_conn.close()
 
             # Update leaderboard
-            await self.update_leaderboard()
+            await self.update_leaderboard(ctx.guild.id)
 
             # Send confirmation
             success_embed = discord.Embed(
@@ -3741,7 +3846,7 @@ class LFGCog(commands.Cog):
             match_conn.close()
 
             # Update leaderboard
-            await self.update_leaderboard()
+            await self.update_leaderboard(ctx.guild.id)
 
             # Send confirmation
             embed = discord.Embed(
