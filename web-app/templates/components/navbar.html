@@ -105,6 +105,18 @@
       Avatar Winrates
     </a>
     <a
+      href="/elements"
+      class="block px-4 py-3 text-text hover:bg-secondary/10 hover:text-secondary transition-colors font-medium">
+      Element Winrates
+    </a>
+    {% if can_view_cards %}
+    <a
+      href="/cards"
+      class="block px-4 py-3 text-text hover:bg-secondary/10 hover:text-secondary transition-colors font-medium">
+      Card Winrates
+    </a>
+    {% endif %}
+    <a
       href="/elo"
       class="block px-4 py-3 text-text hover:bg-secondary/10 hover:text-secondary transition-colors font-medium">
       ELO Leaderboards
@@ -123,11 +135,6 @@
       href="/top-8"
       class="block px-4 py-3 text-text hover:bg-secondary/10 hover:text-secondary transition-colors font-medium">
       Top 8 Decks
-    </a>
-    <a
-      href="/stats"
-      class="block px-4 py-3 text-text hover:bg-secondary/10 hover:text-secondary transition-colors font-medium">
-      Statistics
     </a>
     <a
       href="/help"

@@ -293,7 +293,9 @@ class MatchConfirmationButtons(discord.ui.View):
         # Check if confirmer needs to provide a deck URL
         # is_winner=True means confirmer won (their deck is winner_deck_url)
         # is_winner=False means confirmer lost (their deck is loser_deck_url)
-        confirmer_deck_url = self.winner_deck_url if self.is_winner else self.loser_deck_url
+        confirmer_deck_url = (
+            self.winner_deck_url if self.is_winner else self.loser_deck_url
+        )
         if not confirmer_deck_url:
             # Show modal to collect deck URL before proceeding
             modal = ConfirmerDeckURLModal(self, interaction)
@@ -469,7 +471,9 @@ class ReporterDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
         required=False,
     )
 
-    def __init__(self, view: "LFGReportButtons", interaction: discord.Interaction, is_win: bool):
+    def __init__(
+        self, view: "LFGReportButtons", interaction: discord.Interaction, is_win: bool
+    ):
         super().__init__()
         self.view = view
         self.original_interaction = interaction
@@ -477,7 +481,9 @@ class ReporterDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
 
     async def on_submit(self, interaction: discord.Interaction):
         # Update the reporter's deck URL
-        self.view.reporter_deck_url = self.deck_url.value.strip() if self.deck_url.value else None
+        self.view.reporter_deck_url = (
+            self.deck_url.value.strip() if self.deck_url.value else None
+        )
 
         # Continue with the original flow
         if self.is_win:
@@ -825,7 +831,9 @@ class ConfirmerDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
         required=False,
     )
 
-    def __init__(self, view: "MatchConfirmationButtons", interaction: discord.Interaction):
+    def __init__(
+        self, view: "MatchConfirmationButtons", interaction: discord.Interaction
+    ):
         super().__init__()
         self.view = view
         self.original_interaction = interaction
@@ -911,6 +919,7 @@ class ConfirmerDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
 
         # Update ELO for the loser
         from utils.database import update_elo_db
+
         update_elo_db(view.loser_id, view.loser_global, False, view.winner_id)
 
         # Update the confirmation message
@@ -3739,6 +3748,124 @@ class LFGCog(commands.Cog):
             await ctx.send("You need administrator permissions to use this command.")
         elif isinstance(error, commands.BadArgument):
             await ctx.send("Invalid match ID. Please provide a valid number.")
+
+    @commands.command()
+    async def eligible_for_masters_braket(self, ctx):
+        """Show top 16 ELO players who have one of the required roles."""
+        import sqlite3
+
+        ROLE_IDS = {1445433610609102990, 1455669646370799667}
+
+        if ctx.guild is None:
+            await ctx.send("This command must be run inside a server (guild).")
+            return
+
+        try:
+            conn = sqlite3.connect("elo.db")
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT user_id, user_display_name, elo FROM overall_standings ORDER BY elo DESC"
+            )
+            rows = cur.fetchall()
+            conn.close()
+
+            eligible = []
+            for user_id, display_name, elo in rows:
+                try:
+                    uid = int(user_id)
+                except Exception:
+                    continue
+                member = ctx.guild.get_member(uid)
+                if not member:
+                    continue
+                if any(r.id in ROLE_IDS for r in member.roles):
+                    mention = member.mention
+                    name = display_name or (member.global_name or member.display_name)
+                    eligible.append((elo, mention, name))
+                if len(eligible) >= 16:
+                    break
+
+            if not eligible:
+                await ctx.send("No eligible players found with the required role.")
+                return
+
+            lines = [
+                f"**{i + 1}.** {mention} — **{elo}** ELO ({name})"
+                for i, (elo, mention, name) in enumerate(eligible)
+            ]
+
+            embed = discord.Embed(
+                title="Eligible for Masters Bracket — Top 16 with required role",
+                description="\n".join(lines),
+                color=discord.Color.purple(),
+            )
+            embed.set_footer(
+                text="Role requirement: IDs 1445433610609102990 or 1455669646370799667"
+            )
+            await ctx.send(embed=embed)
+        except Exception as e:
+            logger.error(f"eligible_for_masters_braket error: {e}")
+            await ctx.send("Error fetching eligible players. See logs for details.")
+
+    @commands.command(name="top_16_free_entry")
+    async def top_16_free_entry(self, ctx):
+        """Show top 16 ELO players (no role requirement)."""
+        import sqlite3
+
+        try:
+            conn = sqlite3.connect("elo.db")
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT user_id, user_display_name, elo FROM overall_standings ORDER BY elo DESC"
+            )
+            rows = cur.fetchall()
+            conn.close()
+
+            if not rows:
+                await ctx.send("No ELO standings available.")
+                return
+
+            ROLE_IDS = {1445433610609102990, 1455669646370799667}
+
+            lines = []
+            count = 0
+            for user_id, display_name, elo in rows:
+                if count >= 16:
+                    break
+
+                mention = None
+                display = display_name or ""
+                try:
+                    uid = int(user_id)
+                except Exception:
+                    uid = None
+
+                # If member exists in this guild and has any excluded role, skip them
+                if ctx.guild and uid:
+                    member = ctx.guild.get_member(uid)
+                    if member:
+                        if any(r.id in ROLE_IDS for r in member.roles):
+                            continue
+                        mention = member.mention
+                        display = display_name or (member.display_name or member.name)
+
+                if not mention:
+                    # If user not in guild, assume they don't have the excluded roles and include them
+                    mention = display or str(user_id)
+
+                count += 1
+                lines.append(f"**{count}.** {mention} — **{elo}** ELO ({display})")
+
+            embed = discord.Embed(
+                title="Top 16 — Eligible (without specified roles)",
+                description="\n".join(lines) if lines else "No eligible players found.",
+                color=discord.Color.gold(),
+            )
+            embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+            await ctx.send(embed=embed)
+        except Exception as e:
+            logger.error(f"top16 error: {e}")
+            await ctx.send("Error fetching top 16. See logs for details.")
 
     @commands.command()
     @commands.has_permissions(administrator=True)

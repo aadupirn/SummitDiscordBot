@@ -2,7 +2,16 @@
 Summit Web Application - A lightweight Flask web app
 """
 
-from flask import Flask, render_template, jsonify, request, session, redirect, url_for
+from flask import (
+    Flask,
+    render_template,
+    jsonify,
+    request,
+    session,
+    redirect,
+    url_for,
+    send_from_directory,
+)
 import sqlite3
 import os
 import json
@@ -39,6 +48,7 @@ app = Flask(__name__)
 # Session configuration
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
 
+
 # Application version for cache busting
 def get_app_version():
     """Get application version from git commit hash or fallback to timestamp"""
@@ -48,12 +58,12 @@ def get_app_version():
         if git_dir.exists():
             head_file = git_dir / "HEAD"
             if head_file.exists():
-                with open(head_file, 'r') as f:
+                with open(head_file, "r") as f:
                     ref = f.read().strip()
-                if ref.startswith('ref: '):
+                if ref.startswith("ref: "):
                     ref_path = git_dir / ref[5:]
                     if ref_path.exists():
-                        with open(ref_path, 'r') as f:
+                        with open(ref_path, "r") as f:
                             return f.read().strip()[:8]  # Short hash (8 chars)
                 else:
                     return ref[:8]  # Detached HEAD
@@ -67,6 +77,7 @@ def get_app_version():
     except:
         return "1.0.0"
 
+
 APP_VERSION = get_app_version()
 logger.info(f"Application version: {APP_VERSION}")
 
@@ -77,6 +88,15 @@ DISCORD_REDIRECT_URI = os.environ.get(
     "DISCORD_REDIRECT_URI", "http://localhost:5000/auth/discord/callback"
 )
 
+# Allowed Discord IDs for card winrates page (add your Discord ID and any others)
+ALLOWED_CARD_VIEWERS = [
+    "296846802924208130",
+    "146923845549424640",
+    "128690099432062976",
+    # Add Discord IDs here (as integers or strings)
+    # Example: 123456789012345678,
+]
+
 # API Key configuration for external integrations
 # Support both single API_KEY and multiple API_KEYS (comma-separated)
 API_KEYS_ENV = os.environ.get("API_KEYS", os.environ.get("API_KEY", ""))
@@ -85,6 +105,57 @@ VALID_API_KEYS = [key.strip() for key in API_KEYS_ENV.split(",") if key.strip()]
 # Initialize SorceryAI components (lazy load)
 _rules_retriever = None
 _rules_generator = None
+
+
+# Curiosa API helpers
+def get_deck_id_from_url(url: str) -> str:
+    """Extract deck ID from Curiosa URL."""
+    # Split on '?' to remove any query parameters
+    base_url = url.split("?")[0]
+    # Get the last part of the URL path
+    deck_id = base_url.rstrip("/").split("/")[-1]
+    return deck_id
+
+
+def fetch_deck_data_from_curiosa(deck_url: str) -> str:
+    """
+    Fetch deck data from Curiosa API.
+    Returns JSON string of deck data, or '{}' on failure.
+    """
+    try:
+        deck_id = get_deck_id_from_url(deck_url)
+        if not deck_id:
+            logger.warning("Could not extract deck ID from URL")
+            return "{}"
+
+        response = requests.get(
+            f"https://curiosa.io/api/decks?ids={deck_id}",
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            logger.warning(f"Curiosa API returned status {response.status_code}")
+            return "{}"
+
+        json_data = response.json()
+
+        # Check if we got a valid list with data
+        if not isinstance(json_data, list) or len(json_data) == 0:
+            logger.warning("Curiosa API did not return valid deck data")
+            return "{}"
+
+        # Return the first deck as JSON string
+        return json.dumps(json_data[0])
+
+    except requests.exceptions.Timeout:
+        logger.warning("Curiosa API request timed out")
+        return "{}"
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Curiosa API request failed: {e}")
+        return "{}"
+    except (json.JSONDecodeError, IndexError, KeyError) as e:
+        logger.warning(f"Failed to parse Curiosa response: {e}")
+        return "{}"
 
 
 def require_api_key(f):
@@ -117,6 +188,20 @@ def require_api_key(f):
     return decorated_function
 
 
+def is_allowed_card_viewer():
+    """Check if the current user is allowed to view card winrates"""
+    # Auto-allow access on localhost for development
+    if request.host.startswith("localhost") or request.host.startswith("127.0.0.1"):
+        return True
+    user_id = session.get("user_id")
+    if user_id is None:
+        return False
+    # Check if user's Discord ID is in the allowed list
+    return int(user_id) in ALLOWED_CARD_VIEWERS or str(user_id) in [
+        str(x) for x in ALLOWED_CARD_VIEWERS
+    ]
+
+
 def get_rules_assistant():
     """Lazy load rules assistant components"""
     global _rules_retriever, _rules_generator
@@ -139,16 +224,47 @@ def get_rules_assistant():
 # Path to top-8 event data
 TOP_8_DIR = Path(__file__).parent / "top-8-decks-by-event"
 
+# Event star ratings (1-3 stars) - organized alphabetically
+# Add folder names here with their corresponding rating
+EVENT_RATINGS = {
+    "ColumbusExplor2025": 1,
+    "CortCup2024Stats": 2,
+    "EU Crossroads 2025": 3,
+    "Explorer96": 1,
+    "GenCon2023Stats": 3,
+    "GenCon2024Stats": 3,
+    "Gencon2025": 3,
+    "Houston SCGcon 2025 Crossroads": 3,
+    "King of the Realm Cornerstone in NYC - 2025": 1,
+    "OchoaDecklists": 1,
+    "SCG CON Baltimore 2025 Crossroads": 3,
+    "SCG Con Alanta 2026": 1,
+    "SCG Con Portland 2026": 1,
+    "SCG Con Vegas 2025 Crossroads": 3,
+    "SORCERY CON": 3,
+    "SS2": 1,
+    "Season6TTSLeage": 1,
+    "SorcerersSummit": 2,
+    "SorceryFest2025": 2,
+    "Sydney Cornerstone Top 4 2025": 1,
+    "TTSLeague2023champions": 1,
+    "TTSLeagueS3": 1,
+    "TTSLeagueS7topCut": 1,
+    "UnlandCup25": 1,
+    "Sorcerers Summit 'Bottom' 5 avatars": 1,
+}
+
 
 def extract_year_from_name(name):
     """Extract year from event name for sorting. Returns 0 if no year found."""
     import re
+
     # Look for 4-digit years (2020-2029)
-    match = re.search(r'20(2[0-9])', name)
+    match = re.search(r"20(2[0-9])", name)
     if match:
         return int("20" + match.group(1))
     # Check for 2-digit years like "25" that likely mean 2025
-    match = re.search(r'(?<!\d)(2[3-9])(?!\d)', name)
+    match = re.search(r"(?<!\d)(2[3-9])(?!\d)", name)
     if match:
         return int("20" + match.group(1))
     return 0
@@ -219,7 +335,8 @@ def inject_user():
     """Make current user and app version available to all templates"""
     return {
         "current_user": get_current_user(),
-        "app_version": APP_VERSION
+        "app_version": APP_VERSION,
+        "can_view_cards": is_allowed_card_viewer(),
     }
 
 
@@ -362,6 +479,26 @@ def avatars():
             if f.lower().endswith((".png", ".jpg", ".jpeg"))
         ]
     return render_template("pages/avatars.html", avatar_image_files=avatar_image_files)
+
+
+@app.route("/cards")
+def cards():
+    """Card winrates page - restricted to allowed Discord users"""
+    if not is_allowed_card_viewer():
+        if session.get("user_id") is None:
+            # Not logged in - redirect to login
+            return redirect(url_for("auth_discord"))
+        # Logged in but not authorized
+        return render_template(
+            "pages/error.html", error="You don't have permission to view this page."
+        ), 403
+    return render_template("pages/cards.html")
+
+
+@app.route("/elements")
+def elements():
+    """Elemental winrates page"""
+    return render_template("pages/elements.html")
 
 
 @app.route("/elo")
@@ -538,13 +675,22 @@ def top_8():
                                     "player_count": player_count,
                                     "has_top8": top8_json is not None,
                                     "has_full": full_json is not None,
+                                    "rating": EVENT_RATINGS.get(
+                                        folder.name, 1
+                                    ),  # Default to 1 star if not in dict
                                 }
                             )
                     except Exception as e:
                         print(f"Error loading {json_path}: {e}")
 
     # Sort by year (descending), events without dates go last
-    events.sort(key=lambda e: (extract_year_from_name(e["name"]) > 0, extract_year_from_name(e["name"])), reverse=True)
+    events.sort(
+        key=lambda e: (
+            extract_year_from_name(e["name"]) > 0,
+            extract_year_from_name(e["name"]),
+        ),
+        reverse=True,
+    )
 
     return render_template("pages/top_8.html", events=events)
 
@@ -552,6 +698,8 @@ def top_8():
 @app.route("/top-8/<event_folder>")
 def top_8_event(event_folder):
     """Display Top 8 decks for a specific event"""
+    import csv
+
     event_path = TOP_8_DIR / event_folder
 
     if not event_path.exists():
@@ -609,12 +757,69 @@ def top_8_event(event_folder):
         except Exception as e:
             print(f"Error loading full event: {e}")
 
+    # Look for CSV files for statistics
+    csv_files = list(event_path.glob("*.csv"))
+    elements_csv = None
+    cards_csv = None
+
+    for csv_file in csv_files:
+        if "element" in csv_file.name.lower():
+            elements_csv = csv_file
+        elif not any(x in csv_file.name.lower() for x in ["element", "top8", "top 8"]):
+            cards_csv = csv_file
+
+    element_data = []
+    card_data = []
+
+    # Load element distribution data (optional - currently not displayed)
+    if elements_csv:
+        try:
+            with open(elements_csv, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    element_data.append(
+                        {
+                            "elements": row.get("Deck Elements", "").strip("\"()' "),
+                            "count": row.get(" Count", row.get("Count", "0")),
+                        }
+                    )
+        except Exception as e:
+            print(f"Error loading elements CSV: {e}")
+
+    # Load card statistics data
+    if cards_csv:
+        try:
+            with open(cards_csv, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    count = int(row.get("Count", 0))
+                    if count > 0:  # Only include cards with count > 0
+                        card_data.append(
+                            {
+                                "name": row.get("Name", "Unknown"),
+                                "type": row.get("Type", "Unknown"),
+                                "element": row.get("Element", "Unknown"),
+                                "count": count,
+                                "rarity": row.get("Rarity", "Unknown"),
+                                "avg_played": row.get("Average_Played", "0"),
+                                "deck_percent": row.get(
+                                    "Percent_of_Decks_with_at_least_one_copy", "0"
+                                ),
+                            }
+                        )
+            # Sort by count descending
+            card_data.sort(key=lambda x: x["count"], reverse=True)
+        except Exception as e:
+            print(f"Error loading cards CSV: {e}")
+
     return render_template(
         "pages/top_8_event.html",
         event_name=format_event_name(event_folder),
         event_folder=event_folder,
         top8_decks=top8_decks,
         all_decks=all_decks,
+        card_data=card_data,
+        element_data=element_data,
     )
 
 
@@ -650,7 +855,13 @@ def stats():
                     )
 
     # Sort by year (descending), events without dates go last
-    events.sort(key=lambda e: (extract_year_from_name(e["name"]) > 0, extract_year_from_name(e["name"])), reverse=True)
+    events.sort(
+        key=lambda e: (
+            extract_year_from_name(e["name"]) > 0,
+            extract_year_from_name(e["name"]),
+        ),
+        reverse=True,
+    )
 
     return render_template("pages/stats.html", events=events)
 
@@ -1386,9 +1597,9 @@ def avatar_api(avatar_name):
                 "date": row[4],
                 "winner_elo_change": row[5] if row[5] else 0,
                 "loser_elo_change": row[6] if row[6] else 0,
-                "first_player": "Yes"
+                "first_player": "Play"
                 if row[7] and "y" in str(row[7]).lower()
-                else "No",
+                else "Draw",
                 "match_time": row[8] if row[8] else None,
                 "winner_deck_url": row[11] if len(row) > 11 else None,
                 "loser_deck_url": row[12] if len(row) > 12 else None,
@@ -1426,9 +1637,9 @@ def avatar_api(avatar_name):
                             "date": row[4],
                             "winner_elo_change": row[5] if row[5] else 0,
                             "loser_elo_change": row[6] if row[6] else 0,
-                            "first_player": "Yes"
+                            "first_player": "Play"
                             if row[7] and "y" in str(row[7]).lower()
-                            else "No",
+                            else "Draw",
                             "match_time": row[8] if row[8] else None,
                             "winner_deck_url": row[10] if len(row) > 10 else None,
                             "loser_deck_url": None,
@@ -1520,15 +1731,71 @@ def player_api(player_id):
 
     conn.close()
 
-    if not rows:
+    # Also get recorded games from solo_match_reports
+    solo_rows = []
+    try:
+        solo_conn = sqlite3.connect("../discord-bot/match_records.db")
+        solo_cur = solo_conn.cursor()
+
+        # Convert player_id to int for the query with better error handling
+        try:
+            player_id_int = int(player_id)
+        except (ValueError, TypeError) as e:
+            logger.error(f"Failed to convert player_id '{player_id}' to int: {e}")
+            player_id_int = None
+
+        if player_id_int is not None:
+            query = """
+                SELECT
+                    is_winner,
+                    first_player,
+                    json_deck_data,
+                    match_time,
+                    CASE WHEN is_winner THEN reporter_name ELSE opponent_name END,
+                    CASE WHEN is_winner THEN opponent_name ELSE reporter_name END,
+                    report_date,
+                    0,
+                    0,
+                    curiosa_link,
+                    CASE WHEN is_winner THEN reporter_id ELSE 0 END,
+                    CASE WHEN is_winner THEN 0 ELSE reporter_id END,
+                    rowid,
+                    CASE WHEN is_winner THEN json_deck_data ELSE NULL END,
+                    CASE WHEN is_winner THEN NULL ELSE json_deck_data END,
+                    CASE WHEN is_winner THEN curiosa_link ELSE NULL END,
+                    CASE WHEN is_winner THEN NULL ELSE curiosa_link END
+                FROM solo_match_reports
+                WHERE reporter_id = ?
+                ORDER BY report_date DESC
+                """
+            solo_cur.execute(query, (player_id_int,))
+            solo_rows = solo_cur.fetchall()
+        else:
+            logger.warning(
+                "Skipping solo_match_reports query - could not convert player_id"
+            )
+
+        solo_conn.close()
+    except Exception as e:
+        logger.warning(f"Could not fetch solo_match_reports: {e}", exc_info=True)
+
+    # Combine regular and recorded matches
+    all_rows = rows + solo_rows
+
+    if not rows and not solo_rows:
         return jsonify({"error": "Player not found"}), 404
 
     # Get player name from their most recent match
-    first_match = rows[0]
-    if first_match[0]:  # did_win is True, so player was winner
-        player_name = first_match[4]  # winner_display_name
-    else:
-        player_name = first_match[5]  # losser_display_name
+    player_name = None
+    if rows:
+        first_match = rows[0]
+        if first_match[0]:  # did_win is True, so player was winner
+            player_name = first_match[4]  # winner_display_name
+        else:
+            player_name = first_match[5]  # losser_display_name
+    elif solo_rows:
+        # Fallback to solo_match_reports reporter_name
+        player_name = solo_rows[0][4]  # reporter_name
 
     # Try to get player ELO from elo.db if available
     player_elo = 1500  # Default ELO
@@ -1553,18 +1820,18 @@ def player_api(player_id):
     except sqlite3.OperationalError:
         pass  # Table doesn't exist yet
 
-    # Calculate detailed stats
-    total_matches = len(rows)
-    wins = sum(1 for row in rows if row[0])
+    # Calculate detailed stats using all matches (regular + recorded)
+    total_matches = len(all_rows)
+    wins = sum(1 for row in all_rows if row[0])
     losses = total_matches - wins
     win_rate = (wins / total_matches * 100) if total_matches > 0 else 0
 
     # First player (on the play) stats
     first_player_matches = sum(
-        1 for row in rows if row[1] and "y" in str(row[1]).lower()
+        1 for row in all_rows if row[1] and "y" in str(row[1]).lower()
     )
     first_player_wins = sum(
-        1 for row in rows if row[0] and row[1] and "y" in str(row[1]).lower()
+        1 for row in all_rows if row[0] and row[1] and "y" in str(row[1]).lower()
     )
     first_player_win_rate = (
         (first_player_wins / first_player_matches * 100)
@@ -1573,23 +1840,25 @@ def player_api(player_id):
     )
 
     # On the draw stats
-    draw_matches = sum(1 for row in rows if row[1] and "y" not in str(row[1]).lower())
+    draw_matches = sum(
+        1 for row in all_rows if row[1] and "y" not in str(row[1]).lower()
+    )
     draw_wins = sum(
-        1 for row in rows if row[0] and row[1] and "y" not in str(row[1]).lower()
+        1 for row in all_rows if row[0] and row[1] and "y" not in str(row[1]).lower()
     )
     draw_win_rate = (draw_wins / draw_matches * 100) if draw_matches > 0 else 0
 
     # Average match time
     match_times = [
         float(row[3])
-        for row in rows
+        for row in all_rows
         if row[3] and str(row[3]).replace(".", "").isdigit()
     ]
     avg_match_time = sum(match_times) / len(match_times) if match_times else 0
 
     # Avatar stats - player's OWN avatars (what they played with)
     avatar_stats = {}
-    for row in rows:
+    for row in all_rows:
         did_win = row[0]
         winner_json = row[13] if len(row) > 13 else None  # json_deck_data_winner
         loser_json = row[14] if len(row) > 14 else None  # json_deck_data_loser
@@ -1643,44 +1912,60 @@ def player_api(player_id):
 
     # Avatar matchup records (opponents' avatars)
     opponent_avatar_stats = {}
-    for row in rows:
+    for row in all_rows:
         did_win = row[0]
         winner_json = row[13] if len(row) > 13 else None  # json_deck_data_winner
         loser_json = row[14] if len(row) > 14 else None  # json_deck_data_loser
+        # Get opponent name: if player won, opponent is loser; if player lost, opponent is winner
+        opponent_name = row[5] if did_win else row[4]
+        # Get opponent ID to identify solo reports (opponent_id == 0 for solo reports)
+        opponent_id = row[11] if did_win else row[10] if len(row) > 10 else None
 
-        # Get OPPONENT's deck based on match outcome
-        # If player won → opponent is the loser → use loser's deck
-        # If player lost → opponent is the winner → use winner's deck
+        opponent_avatar_name = None
+
+        # Try to get opponent's avatar from deck JSON (regular matches)
         opponent_deck_json = loser_json if did_win else winner_json
 
-        # No fallback to old json_deck_data - it only had reporter's deck, not opponent's
-        if not opponent_deck_json or opponent_deck_json == "{}":
-            continue
+        if opponent_deck_json and opponent_deck_json != "{}":
+            try:
+                deck_data = json.loads(opponent_deck_json)
+                # Skip if deck_data is empty or has no avatar
+                if deck_data and deck_data.get("avatar"):
+                    avatar = deck_data.get("avatar", [])
+                    if avatar and avatar[0] and avatar[0].get("name"):
+                        opponent_avatar_name = avatar[0].get("name")
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                pass
 
-        try:
-            deck_data = json.loads(opponent_deck_json)
-            # Skip if deck_data is empty or has no avatar
-            if not deck_data or not deck_data.get("avatar"):
-                continue
-
-            avatar = deck_data.get("avatar", [])
-            if not avatar or not avatar[0] or not avatar[0].get("name"):
-                continue
-
-            opponent_avatar_name = avatar[0].get("name")
-
-            if opponent_avatar_name not in opponent_avatar_stats:
-                opponent_avatar_stats[opponent_avatar_name] = {
-                    "wins": 0,
-                    "losses": 0,
-                }
-
-            if did_win:
-                opponent_avatar_stats[opponent_avatar_name]["wins"] += 1
+        # For recorded games (solo reports), get opponent avatar from opponent_name
+        # Only use opponent_name as avatar if it's from solo_match_reports (opponent_id == 0)
+        if not opponent_avatar_name and opponent_name and opponent_id == 0:
+            if "Opponent (" in opponent_name:
+                try:
+                    # Extract avatar name from old "Opponent (Avatar Name)" format
+                    start = opponent_name.find("(") + 1
+                    end = opponent_name.find(")")
+                    if start > 0 and end > start:
+                        opponent_avatar_name = opponent_name[start:end].strip()
+                except (IndexError, ValueError):
+                    pass
             else:
-                opponent_avatar_stats[opponent_avatar_name]["losses"] += 1
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                # New format: opponent_name is the avatar name directly (from solo reports)
+                opponent_avatar_name = opponent_name
+
+        if not opponent_avatar_name:
             continue
+
+        if opponent_avatar_name not in opponent_avatar_stats:
+            opponent_avatar_stats[opponent_avatar_name] = {
+                "wins": 0,
+                "losses": 0,
+            }
+
+        if did_win:
+            opponent_avatar_stats[opponent_avatar_name]["wins"] += 1
+        else:
+            opponent_avatar_stats[opponent_avatar_name]["losses"] += 1
 
     # Format avatar matchup records for response
     avatar_matchups = []
@@ -1708,9 +1993,11 @@ def player_api(player_id):
     if request.host.startswith("localhost") or request.host.startswith("127.0.0.1"):
         is_owner = True
 
-    # Build match history (last 50 matches)
+    # Build match history (last 50 official matches, sorted with newest first)
     match_history = []
-    for row in rows[:50]:
+    # Sort regular matches only (not solo reports) by date (index 6) in descending order
+    sorted_rows = sorted(rows, key=lambda x: x[6] if x[6] else "", reverse=True)
+    for row in sorted_rows[:50]:
         did_win = row[0]
         opponent_name = row[5] if did_win else row[4]
         # When player won, opponent is the loser (losser_id at index 11)
@@ -1777,9 +2064,9 @@ def player_api(player_id):
                 "result": "Win" if did_win else "Loss",
                 "elo_change": elo_change if elo_change else 0,
                 "date": row[6],
-                "first_player": "Yes"
+                "first_player": "Play"
                 if row[1] and "y" in str(row[1]).lower()
-                else "No",
+                else "Draw",
                 "match_time": row[3] if row[3] else None,
                 "replay_url": row[9] if row[9] else None,
                 "player_deck_url": player_deck_url,
@@ -1793,7 +2080,7 @@ def player_api(player_id):
     recent_decks = []
     if is_owner:
         seen_urls = set()
-        for row in rows:
+        for row in all_rows:
             did_win = row[0]
             winner_deck_url = row[15] if len(row) > 15 else row[9]
             loser_deck_url = row[16] if len(row) > 16 else None
@@ -1843,6 +2130,30 @@ def player_api(player_id):
             if len(recent_decks) >= 10:
                 break
 
+    # Build recorded games list (self-reported games from solo_match_reports)
+    recorded_games = []
+    sorted_solo_rows = sorted(
+        solo_rows, key=lambda x: x[6] if x[6] else "", reverse=True
+    )
+    for row in sorted_solo_rows[:50]:
+        did_win = row[0]
+        opponent_name = row[5]  # opponent_name from solo_match_reports
+        deck_url = row[9]  # curiosa_link
+
+        recorded_games.append(
+            {
+                "report_id": row[12],  # rowid from solo_match_reports
+                "opponent": opponent_name,
+                "result": "Win" if did_win else "Loss",
+                "date": row[6],  # report_date
+                "first_player": "Play"
+                if row[1] and "y" in str(row[1]).lower()
+                else "Draw",
+                "match_time": row[3] if row[3] else None,
+                "deck_url": deck_url,
+            }
+        )
+
     return jsonify(
         {
             "id": player_id,
@@ -1864,6 +2175,7 @@ def player_api(player_id):
             "avatar_matchups": avatar_matchups if is_owner else [],
             "recent_decks": recent_decks if is_owner else [],
             "matches": match_history,
+            "recorded_games": recorded_games if is_owner else [],
             "is_owner": is_owner,
         }
     )
@@ -1998,6 +2310,389 @@ def avatars_api():
     return jsonify(avatar_list)
 
 
+@app.route("/api/cards")
+def cards_api():
+    """API endpoint for per-card winrates from all matches with deck data - restricted access"""
+    if not is_allowed_card_viewer():
+        return jsonify({"error": "Unauthorized"}), 403
+
+    import json
+    import re
+
+    # Build card image lookup: card_name_normalized -> filename
+    card_imgs_dir = os.path.join(app.root_path, "card_images")
+    card_image_lookup = {}
+    if os.path.exists(card_imgs_dir):
+        for filename in os.listdir(card_imgs_dir):
+            if not filename.lower().endswith(".png"):
+                continue
+            # Extract card name from filename: {set}-{card_name}-{variant}.png
+            # Example: alp-dark_tower-b-s.png -> dark_tower
+            # Remove known variant suffixes and set prefix
+            base = filename[:-4].lower()  # Remove .png
+            # Remove variant suffixes (b-s, b-f, bt-s, bt-f, scg-f, etc.)
+            for suffix in ["-b-s", "-b-f", "-bt-s", "-bt-f", "-scg-f", "-bt-s-r"]:
+                if base.endswith(suffix):
+                    base = base[: -len(suffix)]
+                    break
+            # Remove set prefix (first part before -)
+            if "-" in base:
+                card_name_normalized = base.split("-", 1)[1]
+                is_standard = "-b-s" in filename.lower() or "-bt-s" in filename.lower()
+                # Prefer standard variant
+                if card_name_normalized not in card_image_lookup or is_standard:
+                    card_image_lookup[card_name_normalized] = filename
+
+    def find_card_image(card_name):
+        """Find matching image filename for a card name"""
+        # Normalize: lowercase, spaces to underscores, remove special chars
+        normalized = (
+            card_name.lower().replace(" ", "_").replace("'", "").replace(",", "")
+        )
+        normalized = re.sub(r"[^a-z0-9_]", "", normalized)
+        return card_image_lookup.get(normalized)
+
+    try:
+        conn = sqlite3.connect("../discord-bot/match_records.db")
+        cur = conn.cursor()
+
+        # Try to read separated winner/loser deck columns first
+        try:
+            cur.execute(
+                """
+                SELECT
+                    json_deck_data_winner,
+                    json_deck_data_loser
+                FROM match_records
+                WHERE (json_deck_data_winner IS NOT NULL AND json_deck_data_winner != '' AND json_deck_data_winner != '{}')
+                   OR (json_deck_data_loser IS NOT NULL AND json_deck_data_loser != '' AND json_deck_data_loser != '{}')
+            """
+            )
+            rows = cur.fetchall()
+            use_new_columns = True
+        except sqlite3.OperationalError:
+            # Fallback to old single json_deck_data column (reporter only)
+            cur.execute(
+                """
+                SELECT
+                    CASE WHEN reporter_id = winner_id THEN 1 ELSE 0 END as reporter_won,
+                    json_deck_data
+                FROM match_records
+                WHERE json_deck_data IS NOT NULL AND json_deck_data != '' AND json_deck_data != '{}'
+            """
+            )
+            rows = cur.fetchall()
+            use_new_columns = False
+
+        conn.close()
+    except sqlite3.OperationalError:
+        return jsonify([])
+
+    # Tally card wins/losses per deck presence (count deck once per card name)
+    card_stats = {}
+    sections = ["spellbook", "atlas", "sideboard"]
+
+    if use_new_columns:
+        for row in rows:
+            winner_deck_str = row[0]
+            loser_deck_str = row[1]
+
+            if winner_deck_str and winner_deck_str not in ("", "{}"):
+                try:
+                    deck_data = json.loads(winner_deck_str)
+                    deck = deck_data[0] if isinstance(deck_data, list) else deck_data
+                    names = set()
+                    for sec in sections:
+                        for card in deck.get(sec, []) or []:
+                            name = card.get("name")
+                            if name:
+                                names.add(name)
+
+                    # types will be collected in the loop below
+                    # names set already built; now collect types per name
+                    # iterate sections again to capture types
+                    for sec in sections:
+                        for card in deck.get(sec, []) or []:
+                            name = card.get("name")
+                            if not name:
+                                continue
+                            ctype = card.get("type") or "Unknown"
+                            if name not in card_stats:
+                                card_stats[name] = {
+                                    "wins": 0,
+                                    "losses": 0,
+                                    "type": ctype,
+                                }
+                            else:
+                                # prefer existing type, otherwise set
+                                if not card_stats[name].get("type"):
+                                    card_stats[name]["type"] = ctype
+
+                    for name in names:
+                        if name not in card_stats:
+                            card_stats[name] = {
+                                "wins": 0,
+                                "losses": 0,
+                                "type": "Unknown",
+                            }
+                        card_stats[name]["wins"] += 1
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                    pass
+
+            if loser_deck_str and loser_deck_str not in ("", "{}"):
+                try:
+                    deck_data = json.loads(loser_deck_str)
+                    deck = deck_data[0] if isinstance(deck_data, list) else deck_data
+                    names = set()
+                    for sec in sections:
+                        for card in deck.get(sec, []) or []:
+                            name = card.get("name")
+                            if name:
+                                names.add(name)
+
+                    for sec in sections:
+                        for card in deck.get(sec, []) or []:
+                            name = card.get("name")
+                            if not name:
+                                continue
+                            ctype = card.get("type") or "Unknown"
+                            if name not in card_stats:
+                                card_stats[name] = {
+                                    "wins": 0,
+                                    "losses": 0,
+                                    "type": ctype,
+                                }
+                            else:
+                                if not card_stats[name].get("type"):
+                                    card_stats[name]["type"] = ctype
+
+                    for name in names:
+                        if name not in card_stats:
+                            card_stats[name] = {
+                                "wins": 0,
+                                "losses": 0,
+                                "type": "Unknown",
+                            }
+                        card_stats[name]["losses"] += 1
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                    pass
+
+    else:
+        # Old logic: only reporter's deck present, use reporter_won flag
+        for row in rows:
+            reporter_won = row[0]
+            deck_json = row[1]
+
+            if not deck_json:
+                continue
+
+            try:
+                deck_data = json.loads(deck_json)
+                deck = deck_data[0] if isinstance(deck_data, list) else deck_data
+                names = set()
+                for sec in sections:
+                    for card in deck.get(sec, []) or []:
+                        name = card.get("name")
+                        if name:
+                            names.add(name)
+
+                # capture types and counts
+                for sec in sections:
+                    for card in deck.get(sec, []) or []:
+                        name = card.get("name")
+                        if not name:
+                            continue
+                        ctype = card.get("type") or "Unknown"
+                        if name not in card_stats:
+                            card_stats[name] = {"wins": 0, "losses": 0, "type": ctype}
+                        else:
+                            if not card_stats[name].get("type"):
+                                card_stats[name]["type"] = ctype
+
+                for name in names:
+                    if name not in card_stats:
+                        card_stats[name] = {"wins": 0, "losses": 0, "type": "Unknown"}
+                    if reporter_won:
+                        card_stats[name]["wins"] += 1
+                    else:
+                        card_stats[name]["losses"] += 1
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                continue
+
+    # Format response
+    card_list = []
+    for name, stats in card_stats.items():
+        total = stats["wins"] + stats["losses"]
+        if total > 0:
+            win_rate = stats["wins"] / total * 100
+            # Filter out cards with 100% win rate and less than 10 reports (likely noise)
+            if win_rate == 100 and total < 10:
+                continue
+            image = find_card_image(name)
+            card_list.append(
+                {
+                    "name": name,
+                    "wins": stats["wins"],
+                    "losses": stats["losses"],
+                    "total": total,
+                    "win_rate": round(win_rate, 1),
+                    "type": stats.get("type", "Unknown"),
+                    "image": image,
+                }
+            )
+
+    # Sort by win_rate then total
+    card_list.sort(key=lambda x: (x["win_rate"], x["total"]), reverse=True)
+
+    return jsonify(card_list)
+
+
+@app.route("/api/elements")
+def elements_api():
+    """API endpoint for elemental winrates from all matches with deck data"""
+    import json
+
+    # Load All_Cards_Array.json for card name -> element lookup
+    all_cards_path = Path(__file__).parent / "curiosa-io-tools" / "All_Cards_Array.json"
+    card_elements = {}  # card_name -> set of elements
+    try:
+        with open(all_cards_path, "r", encoding="utf-8") as f:
+            all_cards = json.load(f)
+            for card in all_cards:
+                name = card.get("name", "")
+                elements_str = card.get("elements", "None")
+                if name and elements_str and elements_str != "None":
+                    # Elements can be comma-separated like "Fire, Water"
+                    card_elements[name.lower()] = set(
+                        e.strip() for e in elements_str.split(",") if e.strip()
+                    )
+    except Exception as e:
+        logger.error(f"Failed to load All_Cards_Array.json: {e}")
+
+    try:
+        conn = sqlite3.connect("../discord-bot/match_records.db")
+        cur = conn.cursor()
+
+        # Try to read separated winner/loser deck columns first
+        try:
+            cur.execute(
+                """
+                SELECT
+                    json_deck_data_winner,
+                    json_deck_data_loser
+                FROM match_records
+                WHERE (json_deck_data_winner IS NOT NULL AND json_deck_data_winner != '' AND json_deck_data_winner != '{}')
+                   OR (json_deck_data_loser IS NOT NULL AND json_deck_data_loser != '' AND json_deck_data_loser != '{}')
+            """
+            )
+            rows = cur.fetchall()
+            use_new_columns = True
+        except sqlite3.OperationalError:
+            # Fallback to old single json_deck_data column (reporter only)
+            cur.execute(
+                """
+                SELECT
+                    CASE WHEN reporter_id = winner_id THEN 1 ELSE 0 END as reporter_won,
+                    json_deck_data
+                FROM match_records
+                WHERE json_deck_data IS NOT NULL AND json_deck_data != '' AND json_deck_data != '{}'
+            """
+            )
+            rows = cur.fetchall()
+            use_new_columns = False
+
+        conn.close()
+    except sqlite3.OperationalError:
+        return jsonify([])
+
+    # Tally element wins/losses based on cards in deck
+    element_stats = {
+        "Fire": {"wins": 0, "losses": 0},
+        "Water": {"wins": 0, "losses": 0},
+        "Earth": {"wins": 0, "losses": 0},
+        "Air": {"wins": 0, "losses": 0},
+    }
+    sections = ["spellbook", "atlas", "sideboard"]
+
+    def get_deck_elements(deck_json):
+        """Extract unique elements from cards in a deck using All_Cards_Array lookup"""
+        elements = set()
+        if not deck_json or deck_json in ("", "{}"):
+            return elements
+        try:
+            deck_data = json.loads(deck_json)
+            deck = deck_data[0] if isinstance(deck_data, list) else deck_data
+            for sec in sections:
+                for card in deck.get(sec, []) or []:
+                    card_name = (card.get("name") or "").lower()
+                    # Look up element from All_Cards_Array
+                    if card_name in card_elements:
+                        elements.update(card_elements[card_name])
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+            pass
+        return elements
+
+    if use_new_columns:
+        for row in rows:
+            winner_deck_str = row[0]
+            loser_deck_str = row[1]
+
+            # Get elements from winner's deck
+            winner_elements = get_deck_elements(winner_deck_str)
+            for element in winner_elements:
+                if element in element_stats:
+                    element_stats[element]["wins"] += 1
+
+            # Get elements from loser's deck
+            loser_elements = get_deck_elements(loser_deck_str)
+            for element in loser_elements:
+                if element in element_stats:
+                    element_stats[element]["losses"] += 1
+    else:
+        # Old logic: only reporter's deck present, use reporter_won flag
+        for row in rows:
+            reporter_won = row[0]
+            deck_json = row[1]
+
+            elements = get_deck_elements(deck_json)
+            for element in elements:
+                if element in element_stats:
+                    if reporter_won:
+                        element_stats[element]["wins"] += 1
+                    else:
+                        element_stats[element]["losses"] += 1
+
+    # Calculate total wins and losses across all matches
+    total_wins = sum(stats["wins"] for stats in element_stats.values())
+    total_losses = sum(stats["losses"] for stats in element_stats.values())
+
+    # Format response - only include the 4 main elements
+    element_list = []
+    for name in ["Fire", "Water", "Earth", "Air"]:
+        stats = element_stats[name]
+        total = stats["wins"] + stats["losses"]
+        win_rate = (stats["wins"] / total * 100) if total > 0 else 50.0
+        # Calculate what % of winning decks contained this element
+        win_presence = (stats["wins"] / total_wins * 100) if total_wins > 0 else 0
+        # Calculate what % of losing decks contained this element
+        loss_presence = (
+            (stats["losses"] / total_losses * 100) if total_losses > 0 else 0
+        )
+        element_list.append(
+            {
+                "name": name,
+                "wins": stats["wins"],
+                "losses": stats["losses"],
+                "total": total,
+                "win_rate": round(win_rate, 1),
+                "win_presence": round(win_presence, 1),
+                "loss_presence": round(loss_presence, 1),
+            }
+        )
+
+    return jsonify(element_list)
+
+
 @app.route("/api/rules-assistant", methods=["POST"])
 def rules_assistant_api():
     """API endpoint for Rules Assistant chat"""
@@ -2036,6 +2731,191 @@ def rules_assistant_api():
         ), 500
 
 
+@app.route("/api/list-all-avatars")
+def list_all_avatars():
+    """API endpoint to get all available avatar cards from All_Cards_Array.json"""
+    import json
+
+    try:
+        all_cards_path = (
+            Path(__file__).parent / "curiosa-io-tools" / "All_Cards_Array.json"
+        )
+        with open(all_cards_path, "r", encoding="utf-8") as f:
+            all_cards = json.load(f)
+
+        # Extract only cards with type "Avatar"
+        avatar_names = []
+        for card in all_cards:
+            guardian = card.get("guardian", {})
+            if guardian.get("type") == "Avatar":
+                name = card.get("name", "").strip()
+                if name:
+                    avatar_names.append({"name": name})
+
+        # Sort alphabetically
+        avatar_names.sort(key=lambda x: x["name"])
+
+        return jsonify(avatar_names)
+    except Exception as e:
+        logger.error(f"Error loading avatars: {e}")
+        return jsonify([])
+
+
+@app.route("/api/record-game", methods=["POST"])
+def record_game():
+    """
+    API endpoint for users to record personal match results (non-ELO).
+    Directly inserts into solo_match_reports table.
+    Requires user to be logged in via session.
+    """
+    # Check authentication
+    user_id = session.get("user_id")
+    if user_id is None:
+        return jsonify({"error": "Authentication required", "success": False}), 401
+
+    username = session.get("username", "Unknown User")
+
+    try:
+        data = request.get_json()
+
+        # Validate required fields
+        required = ["deck_url", "opponent_avatar", "did_win", "went_first"]
+        missing = [f for f in required if f not in data]
+        if missing:
+            return jsonify(
+                {
+                    "error": f"Missing required fields: {', '.join(missing)}",
+                    "success": False,
+                }
+            ), 400
+
+        deck_url = str(data["deck_url"]).strip()
+        opponent_avatar = str(data["opponent_avatar"]).strip()
+        did_win = bool(data["did_win"])
+        went_first = "y" if data["went_first"] else "n"
+        match_time = int(data.get("match_time", 0))
+        match_comment = str(data.get("match_comment", "")).strip()
+
+        # Use avatar name directly as opponent name
+        opponent_name = opponent_avatar
+
+        # Fetch deck data from Curiosa API
+        json_deck_data = fetch_deck_data_from_curiosa(deck_url)
+        if json_deck_data != "{}":
+            logger.info("Successfully fetched deck data for recorded game")
+        else:
+            logger.warning(
+                f"Could not fetch deck data from Curiosa for URL: {deck_url}"
+            )
+
+        # Insert directly into solo_match_reports table
+        try:
+            conn = sqlite3.connect("../discord-bot/match_records.db")
+            cur = conn.cursor()
+
+            cur.execute(
+                """INSERT INTO solo_match_reports
+                   (reporter_id, reporter_name, opponent_name, is_winner,
+                    first_player, match_time, curiosa_link, match_comment,
+                    report_date, json_deck_data)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
+                (
+                    int(user_id),
+                    username,
+                    opponent_name,
+                    did_win,
+                    went_first,
+                    match_time,
+                    deck_url,
+                    match_comment,
+                    json_deck_data,
+                ),
+            )
+
+            # Get the inserted row ID
+            report_id = cur.lastrowid
+
+            conn.commit()
+            conn.close()
+
+            return jsonify(
+                {
+                    "success": True,
+                    "report_id": report_id,
+                    "message": "Game recorded successfully",
+                }
+            )
+
+        except sqlite3.Error as e:
+            logger.error(f"Database error recording game: {e}", exc_info=True)
+            return jsonify(
+                {"error": "Failed to save to database", "success": False}
+            ), 500
+
+    except ValueError as e:
+        return jsonify({"error": f"Invalid data: {str(e)}", "success": False}), 400
+    except Exception as e:
+        logger.error(f"Error recording game: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error", "success": False}), 500
+
+
+@app.route("/api/delete-recorded-game/<int:report_id>", methods=["DELETE"])
+def delete_recorded_game(report_id):
+    """
+    API endpoint to delete a recorded game (solo_match_report).
+    Only the owner of the report can delete it.
+    """
+    # Check authentication
+    user_id = session.get("user_id")
+    if user_id is None:
+        return jsonify({"error": "Authentication required", "success": False}), 401
+
+    try:
+        # Check if the report belongs to this user
+        conn = sqlite3.connect("../discord-bot/match_records.db")
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT reporter_id FROM solo_match_reports WHERE rowid = ?",
+            (report_id,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            conn.close()
+            return (
+                jsonify({"error": "Recorded game not found", "success": False}),
+                404,
+            )
+
+        if int(row[0]) != int(user_id):
+            conn.close()
+            return (
+                jsonify(
+                    {
+                        "error": "You can only delete your own recorded games",
+                        "success": False,
+                    }
+                ),
+                403,
+            )
+
+        # Delete the report
+        cur.execute("DELETE FROM solo_match_reports WHERE rowid = ?", (report_id,))
+        conn.commit()
+        conn.close()
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Recorded game deleted successfully",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error deleting recorded game: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error", "success": False}), 500
+
+
 @app.route("/avatar-images/<path:filename>")
 def avatar_images(filename):
     """Serve avatar images from templates/avatar_imgs folder"""
@@ -2043,6 +2923,15 @@ def avatar_images(filename):
 
     avatar_imgs_dir = os.path.join(app.root_path, "templates", "avatar_imgs")
     return send_from_directory(avatar_imgs_dir, filename)
+
+
+@app.route("/card-images/<path:filename>")
+def card_images(filename):
+    """Serve card images from card_images folder"""
+    from flask import send_from_directory
+
+    card_imgs_dir = os.path.join(app.root_path, "card_images")
+    return send_from_directory(card_imgs_dir, filename)
 
 
 if __name__ == "__main__":

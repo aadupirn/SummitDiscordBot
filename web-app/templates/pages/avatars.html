@@ -24,7 +24,7 @@
     <main>
       <section class="hero">
         <h1>Avatar Win Rates</h1>
-        <p>Global statistics from all matches reported with decklists</p>
+        <p>Global statistics from all matches reported with decklists, sorted by accuracy score (win rate × games played)</p>
       </section>
 
       <section class="avatar-stats-section">
@@ -52,7 +52,7 @@
 
           // GOT Avatars (larger images, need less zoom)
           "animist": 85,
-          "bladedancer": 85,
+          "bladedancer": 100,
           "corruptor": 85,
           "duplicator": 85,
           "harbinger": 85,
@@ -92,17 +92,17 @@
 
           // GOT Avatars
           "animist": "50% 25%",
-          "bladedancer": "50% 50%",
+          "bladedancer": "50% 15%",
           "corruptor": "50% 40%",
           "duplicator": "50% 40%",
           "harbinger": "50% 30%",
           "imposter": "50% 50%",
           "interrogator": "50% 40%",
           "ironclad": "50% 45%",
-          "magician": "50% 50%",
+          "magician": "50% 35%",
           "necromancer": "20% 10%",
           "persecutor": "50% 40%",
-          "realm eater": "50% 10%",
+          "realm_eater": "50% 20%",
           "savior": "50% 30%",
           "spellslinger": "50% 25%",
           "dragonlord": "50% 30%",
@@ -214,8 +214,11 @@
             return;
           }
 
-          // Sort avatars by win rate (descending)
-          data.sort((a, b) => b.win_rate - a.win_rate);
+          // Calculate accuracy stat (win rate × total games) and sort by it (descending)
+          data.forEach(avatar => {
+            avatar.accuracy = avatar.win_rate * avatar.total;
+          });
+          data.sort((a, b) => b.accuracy - a.accuracy);
 
           data.forEach((avatar, index) => {
             const card = document.createElement("a");
