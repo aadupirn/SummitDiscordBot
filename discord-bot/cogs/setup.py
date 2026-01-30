@@ -53,6 +53,15 @@ class SetupModal(discord.ui.Modal, title="Summit Bot Server Configuration"):
         max_length=20,
     )
 
+    invite_link = discord.ui.TextInput(
+        label="Discord Invite Link (Optional)",
+        placeholder="https://discord.gg/yourserver (for cross-server visibility)",
+        required=False,
+        min_length=0,
+        max_length=100,
+        style=discord.TextStyle.short,
+    )
+
     def __init__(self, bot: commands.Bot):
         super().__init__()
         self.bot = bot
@@ -120,6 +129,17 @@ class SetupModal(discord.ui.Modal, title="Summit Bot Server Configuration"):
             except ValueError:
                 errors.append("Milestone Channel ID must be a number")
 
+        # Validate optional Discord invite link
+        invite_link = None
+        if self.invite_link.value.strip():
+            invite_link = self.invite_link.value.strip()
+            # Basic validation - check if it starts with discord link
+            if not (invite_link.startswith("https://discord.gg/") or
+                    invite_link.startswith("https://discord.com/invite/")):
+                errors.append(
+                    "Discord invite link must start with 'https://discord.gg/' or 'https://discord.com/invite/'"
+                )
+
         # If there are errors, show them
         if errors:
             error_msg = "**Configuration Errors:**\n" + "\n".join(
@@ -158,6 +178,7 @@ class SetupModal(discord.ui.Modal, title="Summit Bot Server Configuration"):
             match_report_channel_id=match_report_id,
             leaderboard_channel_id=leaderboard_id,
             milestone_channel_id=milestone_id,
+            discord_invite_link=invite_link,
         )
 
         if success:
@@ -168,6 +189,8 @@ class SetupModal(discord.ui.Modal, title="Summit Bot Server Configuration"):
                 response += f"• **Leaderboard Channel:** <#{leaderboard_id}>\n"
             if milestone_id:
                 response += f"• **Milestone Channel:** <#{milestone_id}>\n"
+            if invite_link:
+                response += f"• **Invite Link:** {invite_link}\n"
 
             if permission_warnings:
                 response += "\n**Warnings:**\n" + "\n".join(
@@ -266,6 +289,12 @@ class SetupCog(commands.Cog):
                     value=f"<#{config['milestone_channel_id']}>",
                     inline=True,
                 )
+            if config.get("discord_invite_link"):
+                embed.add_field(
+                    name="Discord Invite Link",
+                    value=config.get("discord_invite_link"),
+                    inline=False,
+                )
 
             embed.set_footer(text="Click the button below to reconfigure")
 
@@ -282,7 +311,8 @@ class SetupCog(commands.Cog):
                     "• **LFG Channel** - Where players join the matchmaking queue\n"
                     "• **Match Report Channel** - Where match results are posted\n"
                     "• **Leaderboard Channel** (optional) - Where rankings are displayed\n"
-                    "• **Milestone Channel** (optional) - Where milestone announcements go\n\n"
+                    "• **Milestone Channel** (optional) - Where milestone announcements go\n"
+                    "• **Discord Invite Link** (optional) - For cross-server queue visibility\n\n"
                     "To get a channel ID, right-click the channel and select 'Copy Channel ID' "
                     "(Developer Mode must be enabled in Discord settings)."
                 ),
@@ -386,6 +416,13 @@ class SetupCog(commands.Cog):
             value="✅ Configured" if config.get("is_configured") else "❌ Not configured",
             inline=True,
         )
+
+        if config.get("discord_invite_link"):
+            embed.add_field(
+                name="Discord Invite Link",
+                value=config.get("discord_invite_link"),
+                inline=False,
+            )
 
         await ctx.send(embed=embed)
 

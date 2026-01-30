@@ -20,6 +20,8 @@ from utils.server_config import (
     get_channel_for_guild,
     is_summit_server,
     get_embed_footer,
+    get_all_configured_servers,
+    get_server_invite_link,
     SUMMIT_GUILD_ID,
     SUMMIT_CHANNELS,
     SUMMIT_DISCORD_INVITE,
@@ -43,17 +45,25 @@ def generate_milestone_message(count: int) -> str:
     The message is from the perspective of a tired/frantic bot.
     """
     try:
-        response = openai_client.responses.create(
-            model="gpt-4.1-nano",
-            instructions=(
-                "You are a Discord bot that tracks match results for a card game called Sorcery. and a little snarky "
-                "You just recorded a milestone match. Respond in 1-2 sentences from your perspective as an overworked, "
-                "tired, or frantic bot trying to keep up with all these matches. Be sarcastic but appreciative. "
-                "Do NOT use any emojis. Keep it under 50 words. Do not mention the players by name - just say PLAYER1 and PLAYER2 as placeholders."
-            ),
-            input=f"We just hit {count} total matches recorded! Announce this milestone.",
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a Discord bot that tracks match results for a card game called Sorcery and a little snarky. "
+                        "You just recorded a milestone match. Respond in 1-2 sentences from your perspective as an overworked, "
+                        "tired, or frantic bot trying to keep up with all these matches. Be sarcastic but appreciative. "
+                        "Do NOT use any emojis. Keep it under 50 words. Do not mention the players by name - just say PLAYER1 and PLAYER2 as placeholders."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": f"We just hit {count} total matches recorded! Announce this milestone."
+                }
+            ]
         )
-        return response.output_text
+        return response.choices[0].message.content
     except Exception as e:
         logger.error(f"OpenAI API error for milestone message: {e}")
         return f"Phew... {count} matches recorded. My circuits are working overtime. Thanks to PLAYER1 and PLAYER2 for this milestone."
@@ -116,11 +126,11 @@ pending_match_reports = {}
 # Key: frozenset({player1_id, player2_id}), Value: timestamp
 processed_matches = {}
 
-# Store the persistent status message ID
-lfg_status_message_id = None
+# Store the persistent status message IDs per guild
+lfg_status_message_ids = {}  # {guild_id: message_id}
 
-# Store the leaderboard message ID
-leaderboard_message_id = None
+# Store the leaderboard message IDs per guild
+leaderboard_message_ids = {}  # {guild_id: message_id}
 
 
 class MatchReportModal(discord.ui.Modal, title="Match Report"):
@@ -913,6 +923,7 @@ class ConfirmerDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
             combined_comment,
             view.winner_id,
             view.winner_global,
+            guild_id=view.guild_id,
             winner_deck_url=view.winner_deck_url,
             loser_deck_url=view.loser_deck_url,
         )
@@ -1181,7 +1192,8 @@ class DeckURLModal(discord.ui.Modal, title="Join LFG Queue"):
                     f"**Match Found!** {interaction.user.mention} matched with {matched_user.mention}!"
                 )
 
-            await lfg_cog.update_lfg_status()
+            # Update all servers' status after match
+            await lfg_cog.update_all_servers_status()
 
             await interaction.followup.send(
                 f"Match found! You've been paired with {matched_global}. Check your DMs!",
@@ -1208,7 +1220,8 @@ class DeckURLModal(discord.ui.Modal, title="Join LFG Queue"):
             except discord.Forbidden:
                 pass
 
-            await lfg_cog.update_lfg_status()
+            # Update all servers' status after joining queue
+            await lfg_cog.update_all_servers_status()
 
             await interaction.followup.send(
                 f"You've joined the queue for {timeframe_value} minutes!{deck_msg}",
@@ -2140,7 +2153,7 @@ class LFGCog(commands.Cog):
         """Update the leaderboard in the designated channel for a guild"""
         import sqlite3
 
-        global leaderboard_message_id
+        global leaderboard_message_ids
 
         # Default to Summit if no guild specified
         if guild_id is None:
@@ -2229,10 +2242,10 @@ class LFGCog(commands.Cog):
             embed.set_footer(text="Updates automatically after each match")
 
             # Delete old leaderboard message
-            if leaderboard_message_id:
+            if guild_id in leaderboard_message_ids:
                 try:
                     old_message = await leaderboard_channel.fetch_message(
-                        leaderboard_message_id
+                        leaderboard_message_ids[guild_id]
                     )
                     await old_message.delete()
                 except discord.NotFound:
@@ -2242,7 +2255,7 @@ class LFGCog(commands.Cog):
 
             # Send new leaderboard message
             new_message = await leaderboard_channel.send(embed=embed)
-            leaderboard_message_id = new_message.id
+            leaderboard_message_ids[guild_id] = new_message.id
             logger.info("Leaderboard updated successfully")
 
         except Exception as e:
@@ -2259,12 +2272,12 @@ class LFGCog(commands.Cog):
                 self.clean_expired_lfg(guild_id)
                 final_count = len(guild_queue)
 
-                # If someone was removed, update the status message for that guild
+                # If someone was removed, update all servers' status
                 if initial_count != final_count:
                     logger.info(
                         f"Auto-removed {initial_count - final_count} expired queue entries for guild {guild_id}"
                     )
-                    await self.update_lfg_status(guild_id)
+                    await self.update_all_servers_status()
 
             # Clean up old processed matches (older than 1 hour)
             self.clean_expired_processed_matches()
@@ -2277,8 +2290,8 @@ class LFGCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def update_lfg_status(self, guild_id: int = None):
-        """Update the persistent LFG status message for a guild"""
-        global lfg_status_message_id
+        """Update the persistent LFG status message for a guild with cross-server visibility"""
+        global lfg_status_message_ids
 
         # Default to Summit if no guild specified
         if guild_id is None:
@@ -2333,6 +2346,45 @@ class LFGCog(commands.Cog):
 
             embed.set_footer(text="Status updates automatically")
 
+        # Add cross-server queue visibility
+        other_servers_text = []
+        try:
+            for other_guild_id in get_all_configured_servers():
+                if other_guild_id == guild_id:
+                    continue  # Skip current server
+
+                other_queue = get_guild_queue(other_guild_id)
+                if len(other_queue) == 0:
+                    continue  # Skip empty queues
+
+                # Get server info
+                try:
+                    other_guild = self.bot.get_guild(other_guild_id)
+                    server_name = other_guild.name if other_guild else "Unknown Server"
+                except Exception:
+                    server_name = "Unknown Server"
+
+                # Get invite link from config
+                invite_link = get_server_invite_link(other_guild_id)
+                if invite_link:
+                    link_text = f" ([Join Server]({invite_link}))"
+                else:
+                    link_text = ""
+
+                other_servers_text.append(
+                    f"**{server_name}**: {len(other_queue)} player(s) in queue{link_text}"
+                )
+        except Exception as e:
+            logger.error(f"Error getting cross-server queues: {e}")
+
+        # Add cross-server field if there are other active queues
+        if other_servers_text:
+            embed.add_field(
+                name="🌐 Other Servers",
+                value="\n".join(other_servers_text),
+                inline=False,
+            )
+
         # Add Summit branding for non-Summit servers
         footer_text = get_embed_footer(guild_id)
         if footer_text:
@@ -2343,9 +2395,9 @@ class LFGCog(commands.Cog):
 
         # Delete old message and send new one
         try:
-            if lfg_status_message_id:
+            if guild_id in lfg_status_message_ids:
                 try:
-                    old_message = await lfg_channel.fetch_message(lfg_status_message_id)
+                    old_message = await lfg_channel.fetch_message(lfg_status_message_ids[guild_id])
                     await old_message.delete()
                 except discord.NotFound:
                     # Message was already deleted, no problem
@@ -2355,10 +2407,21 @@ class LFGCog(commands.Cog):
 
             # Send new status message with button
             new_message = await lfg_channel.send(embed=embed, view=view)
-            lfg_status_message_id = new_message.id
+            lfg_status_message_ids[guild_id] = new_message.id
 
         except Exception as e:
             logger.error(f"Error updating LFG status message: {e}")
+
+    async def update_all_servers_status(self):
+        """Update status messages for all configured servers after a queue event"""
+        try:
+            for guild_id in get_all_configured_servers():
+                try:
+                    await self.update_lfg_status(guild_id)
+                except Exception as e:
+                    logger.error(f"Failed to update status for guild {guild_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error in update_all_servers_status: {e}")
 
     def levenshtein_distance(self, s1, s2):
         """Calculate the Levenshtein distance between two strings"""
@@ -2388,7 +2451,7 @@ class LFGCog(commands.Cog):
             return
 
         # Only respond in the LFG channel
-        if ctx.channel.id != self.lfg_channel_id:
+        if ctx.channel.id != self.get_lfg_channel_id(ctx.guild.id):
             return
 
         # Extract the failed command from the message
@@ -2755,8 +2818,9 @@ class LFGCog(commands.Cog):
     async def check_lfg(self, ctx):
         """Check if anyone is currently in the LFG queue."""
         async with lfg_queue_lock:
-            self.clean_expired_lfg()
-            queue_size = len(lfg_queue)
+            self.clean_expired_lfg(ctx.guild.id)
+            guild_queue = get_guild_queue(ctx.guild.id)
+            queue_size = len(guild_queue)
 
         if queue_size > 0:
             await ctx.send(f"{ctx.author.mention}, yes, someone is in the queue!")
@@ -2796,8 +2860,8 @@ class LFGCog(commands.Cog):
             except Exception as e:
                 logger.error(f"Error sending DM to {ctx.author}: {e}")
 
-            # Update status message after leaving queue
-            await self.update_lfg_status()
+            # Update all servers' status after leaving queue
+            await self.update_all_servers_status()
         else:
             # Send DM to user
             try:

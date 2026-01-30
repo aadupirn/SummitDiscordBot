@@ -46,9 +46,19 @@ def create_server_config_db():
             leaderboard_mode TEXT DEFAULT 'elo',
             is_configured BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            discord_invite_link TEXT
         )
     """)
+
+    # Migration: Add discord_invite_link column if it doesn't exist
+    try:
+        cur.execute("SELECT discord_invite_link FROM server_configs LIMIT 1")
+    except sqlite3.OperationalError:
+        # Column doesn't exist, add it
+        logger.info("Adding discord_invite_link column to server_configs table")
+        cur.execute("ALTER TABLE server_configs ADD COLUMN discord_invite_link TEXT")
+        conn.commit()
 
     conn.commit()
     conn.close()
@@ -75,6 +85,7 @@ def get_server_config(guild_id: int) -> Optional[dict]:
             "milestone_channel_id": SUMMIT_CHANNELS["milestone"],
             "leaderboard_mode": "elo",
             "is_configured": True,
+            "discord_invite_link": SUMMIT_DISCORD_INVITE,
         }
 
     create_server_config_db()
@@ -86,7 +97,7 @@ def get_server_config(guild_id: int) -> Optional[dict]:
         """
         SELECT guild_id, guild_name, lfg_channel_id, match_report_channel_id,
                leaderboard_channel_id, milestone_channel_id, leaderboard_mode,
-               is_configured, created_at, updated_at
+               is_configured, created_at, updated_at, discord_invite_link
         FROM server_configs
         WHERE guild_id = ?
     """,
@@ -109,6 +120,7 @@ def set_server_config(
     leaderboard_channel_id: Optional[int] = None,
     milestone_channel_id: Optional[int] = None,
     leaderboard_mode: str = "elo",
+    discord_invite_link: Optional[str] = None,
 ) -> bool:
     """
     Save or update server configuration.
@@ -121,6 +133,7 @@ def set_server_config(
         leaderboard_channel_id: Optional channel ID for leaderboard display
         milestone_channel_id: Optional channel ID for milestone announcements
         leaderboard_mode: Leaderboard ranking mode ('elo', 'wins', 'win_rate')
+        discord_invite_link: Optional permanent Discord invite link
 
     Returns:
         True if successful, False otherwise
@@ -141,8 +154,8 @@ def set_server_config(
             INSERT INTO server_configs
                 (guild_id, guild_name, lfg_channel_id, match_report_channel_id,
                  leaderboard_channel_id, milestone_channel_id, leaderboard_mode,
-                 is_configured, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+                 discord_invite_link, is_configured, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
             ON CONFLICT(guild_id) DO UPDATE SET
                 guild_name = excluded.guild_name,
                 lfg_channel_id = excluded.lfg_channel_id,
@@ -150,6 +163,7 @@ def set_server_config(
                 leaderboard_channel_id = excluded.leaderboard_channel_id,
                 milestone_channel_id = excluded.milestone_channel_id,
                 leaderboard_mode = excluded.leaderboard_mode,
+                discord_invite_link = excluded.discord_invite_link,
                 is_configured = 1,
                 updated_at = CURRENT_TIMESTAMP
         """,
@@ -161,6 +175,7 @@ def set_server_config(
                 leaderboard_channel_id,
                 milestone_channel_id,
                 leaderboard_mode,
+                discord_invite_link,
             ),
         )
 
@@ -234,6 +249,26 @@ def get_embed_footer(guild_id: int) -> Optional[str]:
         return None
 
     return f"Brought to you by the Sorcerers Summit\n{SUMMIT_DISCORD_INVITE}"
+
+
+def get_server_invite_link(guild_id: int) -> Optional[str]:
+    """
+    Get the Discord invite link for a server.
+
+    Args:
+        guild_id: The Discord guild ID
+
+    Returns:
+        The invite link, or None if not configured
+    """
+    if guild_id == SUMMIT_GUILD_ID:
+        return SUMMIT_DISCORD_INVITE
+
+    config = get_server_config(guild_id)
+    if config:
+        return config.get("discord_invite_link")
+
+    return None
 
 
 def get_all_configured_servers() -> list:
