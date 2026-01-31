@@ -7,6 +7,8 @@ import logging
 import random
 
 from cogs.lfg import LFGReportButtons
+from utils.server_config import SUMMIT_GUILD_ID
+from utils.database import get_match_table_name
 
 logger = logging.getLogger("discord_bot")
 
@@ -166,7 +168,17 @@ class EloCog(commands.Cog):
 
     @commands.command()
     async def rank(self, ctx, user: discord.Member = None):
-        """Check your current Elo ranking, or check another user's rank by tagging them."""
+        """Check your current Elo ranking, or check another user's rank by tagging them.
+        Note: ELO rankings are only available on the Summit server."""
+        # Check if this is Summit server
+        guild_id = ctx.guild.id if ctx.guild else None
+        if guild_id and guild_id != SUMMIT_GUILD_ID:
+            await ctx.send(
+                f"{ctx.author.mention}, ELO rankings are only available on the Sorcerers Summit server. "
+                "Use `!mystats` to see your win/loss record for this server."
+            )
+            return
+
         # Determine which user to check
         target_user = user if user else ctx.author
         is_self = target_user == ctx.author
@@ -205,7 +217,15 @@ class EloCog(commands.Cog):
 
     @commands.command()
     async def leaderboard(self, ctx):
-        """Check the top 16 Elo rankings."""
+        """Check the top 16 Elo rankings. Only available on Summit server."""
+        # Check if this is Summit server
+        guild_id = ctx.guild.id if ctx.guild else None
+        if guild_id and guild_id != SUMMIT_GUILD_ID:
+            await ctx.send(
+                f"{ctx.author.mention}, ELO leaderboards are only available on the Sorcerers Summit server."
+            )
+            return
+
         conn = sqlite3.connect("elo.db")
         cur = conn.cursor()
         cur.execute(
@@ -223,7 +243,19 @@ class EloCog(commands.Cog):
 
     @commands.command()
     async def masters_bracket(self, ctx):
-        """Check the top 16 Elo rankings for masters bracket members only."""
+        """Check the top 16 Elo rankings for masters bracket members only. Summit server only."""
+        # Check if this is Summit server
+        guild = ctx.guild
+        if not guild:
+            await ctx.send("This command can only be used in a server.")
+            return
+
+        if guild.id != SUMMIT_GUILD_ID:
+            await ctx.send(
+                f"{ctx.author.mention}, Masters bracket rankings are only available on the Sorcerers Summit server."
+            )
+            return
+
         # Role IDs to filter by
         masters_role_ids = [1455669646370799667, 1445433610609102990]
 
@@ -234,12 +266,6 @@ class EloCog(commands.Cog):
         )
         all_players = cur.fetchall()
         conn.close()
-
-        # Filter players who have one of the masters roles
-        guild = ctx.guild
-        if not guild:
-            await ctx.send("This command can only be used in a server.")
-            return
 
         filtered_players = []
         for user_id, display_name, elo in all_players:
@@ -263,39 +289,80 @@ class EloCog(commands.Cog):
     @commands.command()
     async def mystats(self, ctx):
         """Check your match statistics. Includes win rate, first player win rate,
-        avatar performance, and Elo."""
+        avatar performance, and Elo (Summit server only)."""
         try:
+            # Determine which table to query based on guild
+            guild_id = ctx.guild.id if ctx.guild else SUMMIT_GUILD_ID
+            guild_name = ctx.guild.name if ctx.guild else "Sorcerers Summit"
+            is_summit = guild_id == SUMMIT_GUILD_ID
+            table_name = get_match_table_name(guild_id, guild_name)
+
             conn = sqlite3.connect("match_records.db")
             cur = conn.cursor()
+
+            # Check if the server-specific table exists
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,)
+            )
+            table_exists = cur.fetchone() is not None
+
+            if not table_exists and not is_summit:
+                await ctx.send(
+                    f"{ctx.author.mention}, no match records exist for this server yet. "
+                    "Play some matches to get started!"
+                )
+                conn.close()
+                return
 
             # Query matches where user is winner OR loser
             # Since we record each match twice (once for winner, once for loser),
             # we need to deduplicate by selecting DISTINCT based on the unique match
-            cur.execute(
-                """
-                SELECT DISTINCT
-                    CASE WHEN winner_id = ? THEN 1 ELSE 0 END as did_win,
-                    first_player, 
-                    json_deck_data, 
-                    match_time,
-                    CASE 
-                        WHEN winner_id < losser_id THEN winner_id || '-' || losser_id || '-' || timestamp
-                        ELSE losser_id || '-' || winner_id || '-' || timestamp
-                    END as match_key
-                FROM match_records 
-                WHERE winner_id = ? OR losser_id = ?
-                UNION ALL
-                SELECT DISTINCT
-                    is_winner as did_win,
-                    first_player,
-                    json_deck_data,
-                    match_time,
-                    reporter_id || '-solo-' || report_date as match_key
-                FROM solo_match_reports
-                WHERE reporter_id = ?
-            """,
-                (ctx.author.id, ctx.author.id, ctx.author.id, ctx.author.id),
-            )
+            if is_summit:
+                # Summit server includes solo_match_reports
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT
+                        CASE WHEN winner_id = ? THEN 1 ELSE 0 END as did_win,
+                        first_player,
+                        json_deck_data,
+                        match_time,
+                        CASE
+                            WHEN winner_id < losser_id THEN winner_id || '-' || losser_id || '-' || timestamp
+                            ELSE losser_id || '-' || winner_id || '-' || timestamp
+                        END as match_key
+                    FROM {table_name}
+                    WHERE winner_id = ? OR losser_id = ?
+                    UNION ALL
+                    SELECT DISTINCT
+                        is_winner as did_win,
+                        first_player,
+                        json_deck_data,
+                        match_time,
+                        reporter_id || '-solo-' || report_date as match_key
+                    FROM solo_match_reports
+                    WHERE reporter_id = ?
+                """,
+                    (ctx.author.id, ctx.author.id, ctx.author.id, ctx.author.id),
+                )
+            else:
+                # Non-Summit servers - query server-specific table only
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT
+                        CASE WHEN winner_id = ? THEN 1 ELSE 0 END as did_win,
+                        first_player,
+                        json_deck_data,
+                        match_time,
+                        CASE
+                            WHEN winner_id < losser_id THEN winner_id || '-' || losser_id || '-' || timestamp
+                            ELSE losser_id || '-' || winner_id || '-' || timestamp
+                        END as match_key
+                    FROM {table_name}
+                    WHERE winner_id = ? OR losser_id = ?
+                """,
+                    (ctx.author.id, ctx.author.id, ctx.author.id),
+                )
 
             all_rows = cur.fetchall()
 
@@ -397,42 +464,43 @@ class EloCog(commands.Cog):
             else:
                 response += f"\nNo avatar data found in your match records."
 
-            # Get the user's elo
-            try:
-                conn_elo = sqlite3.connect("elo.db")
-                cur_elo = conn_elo.cursor()
+            # Get the user's elo (Summit server only)
+            if is_summit:
+                try:
+                    conn_elo = sqlite3.connect("elo.db")
+                    cur_elo = conn_elo.cursor()
 
-                # Verify the table exists
-                cur_elo.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='overall_standings'"
-                )
-                if not cur_elo.fetchone():
-                    logger.error("Table 'overall_standings' not found in elo.db")
+                    # Verify the table exists
+                    cur_elo.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='overall_standings'"
+                    )
+                    if not cur_elo.fetchone():
+                        logger.error("Table 'overall_standings' not found in elo.db")
+                        response += (
+                            f"\nError accessing Elo data. Please contact an administrator."
+                        )
+                    else:
+                        cur_elo.execute(
+                            "SELECT elo FROM overall_standings WHERE user_id=?",
+                            (ctx.author.id,),
+                        )
+                        elo_row = cur_elo.fetchone()
+                        if elo_row:
+                            elo = elo_row[0]
+                            cur_elo.execute(
+                                "SELECT COUNT(*) FROM overall_standings WHERE elo > ?",
+                                (elo,),
+                            )
+                            rank = cur_elo.fetchone()[0] + 1
+                            response += f"\n**Your Elo:** {elo} (Rank #{rank})"
+                        else:
+                            response += f"\nYou don't have an Elo rating yet."
+
+                except sqlite3.Error as e:
+                    logger.error(f"Database error accessing elo.db: {e}")
                     response += (
                         f"\nError accessing Elo data. Please contact an administrator."
                     )
-                else:
-                    cur_elo.execute(
-                        "SELECT elo FROM overall_standings WHERE user_id=?",
-                        (ctx.author.id,),
-                    )
-                    elo_row = cur_elo.fetchone()
-                    if elo_row:
-                        elo = elo_row[0]
-                        cur_elo.execute(
-                            "SELECT COUNT(*) FROM overall_standings WHERE elo > ?",
-                            (elo,),
-                        )
-                        rank = cur_elo.fetchone()[0] + 1
-                        response += f"\n**Your Elo:** {elo} (Rank #{rank})"
-                    else:
-                        response += f"\nYou don't have an Elo rating yet."
-
-            except sqlite3.Error as e:
-                logger.error(f"Database error accessing elo.db: {e}")
-                response += (
-                    f"\nError accessing Elo data. Please contact an administrator."
-                )
 
             await ctx.send(response)
 
@@ -533,64 +601,113 @@ class EloCog(commands.Cog):
             # Check if command is used in a DM
             is_dm = isinstance(ctx.channel, discord.DMChannel)
 
+            # Determine which table to query based on guild
+            guild_id = ctx.guild.id if ctx.guild else SUMMIT_GUILD_ID
+            guild_name = ctx.guild.name if ctx.guild else "Sorcerers Summit"
+            is_summit = guild_id == SUMMIT_GUILD_ID
+            table_name = get_match_table_name(guild_id, guild_name)
+
             conn = sqlite3.connect("match_records.db")
             cur = conn.cursor()
 
             try:
-                # Query both tables with appropriate field mappings
-                # Get matches where user was either winner or loser (not just reporter)
+                # Check if the server-specific table exists
                 cur.execute(
-                    """
-                    SELECT 
-                        winner_display_name as winner,
-                        losser_display_name as loser,
-                        CASE 
-                            WHEN winner_id = ? THEN 1
-                            ELSE 0
-                        END as did_win,
-                        first_player,
-                        match_time,
-                        curiosa_url as replay_url,
-                        match_comment,
-                        timestamp as match_date,
-                        'match_records' as source,
-                        CASE 
-                            WHEN winner_id = ? THEN COALESCE(winner_elo_change, 0)
-                            ELSE COALESCE(loser_elo_change, 0)
-                        END as elo_change
-                    FROM match_records 
-                    WHERE winner_id = ? OR losser_id = ?
-                    UNION ALL
-                    SELECT 
-                        CASE 
-                            WHEN is_winner = 1 THEN reporter_name 
-                            ELSE opponent_name 
-                        END as winner,
-                        CASE 
-                            WHEN is_winner = 1 THEN opponent_name 
-                            ELSE reporter_name 
-                        END as loser,
-                        is_winner as did_win,
-                        first_player,
-                        match_time,
-                        curiosa_link as replay_url,
-                        match_comment,
-                        report_date as match_date,
-                        'solo_reports' as source,
-                        0 as elo_change
-                    FROM solo_match_reports
-                    WHERE reporter_id = ?
-                    ORDER BY match_date DESC
-                    LIMIT 10
-                    """,
-                    (
-                        ctx.author.id,
-                        ctx.author.id,
-                        ctx.author.id,
-                        ctx.author.id,
-                        ctx.author.id,
-                    ),
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,)
                 )
+                table_exists = cur.fetchone() is not None
+
+                if not table_exists and not is_summit:
+                    await ctx.send(
+                        f"{ctx.author.mention}, no match records exist for this server yet!"
+                    )
+                    return
+
+                # Query matches based on server
+                if is_summit:
+                    # Summit server includes solo_match_reports and ELO changes
+                    cur.execute(
+                        f"""
+                        SELECT
+                            winner_display_name as winner,
+                            losser_display_name as loser,
+                            CASE
+                                WHEN winner_id = ? THEN 1
+                                ELSE 0
+                            END as did_win,
+                            first_player,
+                            match_time,
+                            curiosa_url as replay_url,
+                            match_comment,
+                            timestamp as match_date,
+                            'match_records' as source,
+                            CASE
+                                WHEN winner_id = ? THEN COALESCE(winner_elo_change, 0)
+                                ELSE COALESCE(loser_elo_change, 0)
+                            END as elo_change
+                        FROM {table_name}
+                        WHERE winner_id = ? OR losser_id = ?
+                        UNION ALL
+                        SELECT
+                            CASE
+                                WHEN is_winner = 1 THEN reporter_name
+                                ELSE opponent_name
+                            END as winner,
+                            CASE
+                                WHEN is_winner = 1 THEN opponent_name
+                                ELSE reporter_name
+                            END as loser,
+                            is_winner as did_win,
+                            first_player,
+                            match_time,
+                            curiosa_link as replay_url,
+                            match_comment,
+                            report_date as match_date,
+                            'solo_reports' as source,
+                            0 as elo_change
+                        FROM solo_match_reports
+                        WHERE reporter_id = ?
+                        ORDER BY match_date DESC
+                        LIMIT 10
+                        """,
+                        (
+                            ctx.author.id,
+                            ctx.author.id,
+                            ctx.author.id,
+                            ctx.author.id,
+                            ctx.author.id,
+                        ),
+                    )
+                else:
+                    # Non-Summit servers - no solo reports, no ELO
+                    cur.execute(
+                        f"""
+                        SELECT
+                            winner_display_name as winner,
+                            losser_display_name as loser,
+                            CASE
+                                WHEN winner_id = ? THEN 1
+                                ELSE 0
+                            END as did_win,
+                            first_player,
+                            match_time,
+                            curiosa_url as replay_url,
+                            match_comment,
+                            timestamp as match_date,
+                            'match_records' as source,
+                            0 as elo_change
+                        FROM {table_name}
+                        WHERE winner_id = ? OR losser_id = ?
+                        ORDER BY match_date DESC
+                        LIMIT 10
+                        """,
+                        (
+                            ctx.author.id,
+                            ctx.author.id,
+                            ctx.author.id,
+                        ),
+                    )
 
                 rows = cur.fetchall()
 

@@ -1,10 +1,133 @@
 import sqlite3
 import datetime
 import logging
+import re
 
 from utils.deck_checker import scrape_Curosa
+from utils.server_config import SUMMIT_GUILD_ID
 
 logger = logging.getLogger("discord_bot")
+
+
+def sanitize_table_name(guild_name: str) -> str:
+    """
+    Convert a guild name to a valid SQL table name.
+
+    Args:
+        guild_name: The Discord guild name
+
+    Returns:
+        A sanitized string safe for use as a SQL table name
+    """
+    # Convert to lowercase
+    name = guild_name.lower()
+    # Replace spaces and hyphens with underscores
+    name = re.sub(r'[\s\-]+', '_', name)
+    # Remove any characters that aren't alphanumeric or underscore
+    name = re.sub(r'[^a-z0-9_]', '', name)
+    # Ensure it doesn't start with a number
+    if name and name[0].isdigit():
+        name = '_' + name
+    # Limit length to 50 characters
+    name = name[:50]
+    # Ensure we have something valid
+    if not name:
+        name = 'unknown_server'
+    return name
+
+
+def get_match_table_name(guild_id: int, guild_name: str = None) -> str:
+    """
+    Get the appropriate match records table name for a guild.
+
+    Args:
+        guild_id: The Discord guild ID
+        guild_name: The guild name (required for non-Summit servers)
+
+    Returns:
+        The table name to use for match records
+    """
+    if guild_id == SUMMIT_GUILD_ID:
+        return "match_records"
+
+    if not guild_name:
+        # Fallback to guild_id if name not provided
+        return f"match_records_{guild_id}"
+
+    return f"match_records_{sanitize_table_name(guild_name)}"
+
+
+def create_server_match_table(guild_id: int, guild_name: str):
+    """
+    Create a server-specific match records table if it doesn't exist.
+    Non-Summit servers don't track ELO.
+
+    Args:
+        guild_id: The Discord guild ID
+        guild_name: The guild name
+    """
+    if guild_id == SUMMIT_GUILD_ID:
+        # Summit uses the main match_records table
+        create_db()
+        return
+
+    table_name = get_match_table_name(guild_id, guild_name)
+
+    conn = sqlite3.connect("match_records.db")
+    cur = conn.cursor()
+
+    # Create server-specific table without ELO columns
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS {table_name}
+                   (match_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reporter_id INTEGER,
+                    winner_id INTEGER,
+                    winner_display_name TEXT,
+                    losser_id INTEGER,
+                    losser_display_name TEXT,
+                    did_win BOOLEAN,
+                    timestamp TEXT,
+                    first_player TEXT,
+                    match_time INTEGER,
+                    curiosa_url TEXT,
+                    match_comment TEXT,
+                    json_deck_data TEXT,
+                    curiosa_url_winner TEXT,
+                    curiosa_url_loser TEXT,
+                    json_deck_data_winner TEXT,
+                    json_deck_data_loser TEXT,
+                    guild_id INTEGER
+                   )""")
+
+    conn.commit()
+    conn.close()
+    logger.info(f"Created/verified server match table: {table_name}")
+
+
+def get_server_match_count(guild_id: int, guild_name: str = None) -> int:
+    """
+    Get the total number of matches for a specific server.
+
+    Args:
+        guild_id: The Discord guild ID
+        guild_name: The guild name (required for non-Summit servers)
+
+    Returns:
+        The match count for that server
+    """
+    table_name = get_match_table_name(guild_id, guild_name)
+
+    conn = sqlite3.connect("match_records.db")
+    cur = conn.cursor()
+
+    try:
+        cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+        count = cur.fetchone()[0]
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet
+        count = 0
+
+    conn.close()
+    return count
 
 
 def create_db():
@@ -226,17 +349,33 @@ async def winner_report(
     interaction_user_id,
     interaction_global,
     guild_id=None,
+    guild_name=None,
     winner_deck_url=None,
     loser_deck_url=None,
 ):
     """
     Log a win in the database.
 
+    Args:
+        guild_id: The Discord guild ID
+        guild_name: The guild name (required for non-Summit servers)
+
     Returns:
         Tuple of (match_id, winner_id, loser_id)
     """
-    logger.info(f"Logging win for user {interaction_global}")
-    create_db()
+    logger.info(f"Logging win for user {interaction_global} in guild {guild_id}")
+
+    # Determine if this is Summit server (has ELO) or other server (no ELO)
+    is_summit = guild_id == SUMMIT_GUILD_ID
+
+    # Ensure the appropriate table exists
+    if is_summit:
+        create_db()
+        table_name = "match_records"
+    else:
+        create_server_match_table(guild_id, guild_name)
+        table_name = get_match_table_name(guild_id, guild_name)
+
     conn = sqlite3.connect("match_records.db")
     cur = conn.cursor()
 
@@ -254,42 +393,75 @@ async def winner_report(
     if loser_deck_url:
         json_deck_data_loser = scrape_Curosa(loser_deck_url, "deck_data_test.json")
 
-    # Update ELO and get the change values
-    new_elo, elo_change = update_elo_db(
-        interaction_user_id, interaction_global, did_win, opponent_id
-    )
-    # For winner_report, did_win is True so this is the winner's elo change
-    winner_elo_change = elo_change
-    loser_elo_change = -elo_change  # Approximate: loser loses roughly what winner gains
+    # Only update ELO for Summit server
+    winner_elo_change = None
+    loser_elo_change = None
+    if is_summit:
+        new_elo, elo_change = update_elo_db(
+            interaction_user_id, interaction_global, did_win, opponent_id
+        )
+        # For winner_report, did_win is True so this is the winner's elo change
+        winner_elo_change = elo_change
+        loser_elo_change = -elo_change  # Approximate: loser loses roughly what winner gains
 
-    cur.execute(
-        "INSERT INTO match_records (reporter_id, winner_id, winner_display_name, "
-        "losser_id, losser_display_name, did_win, timestamp, first_player, match_time, "
-        "curiosa_url, curiosa_url_winner, curiosa_url_loser, match_comment, "
-        "json_deck_data, json_deck_data_winner, json_deck_data_loser, winner_elo_change, loser_elo_change, guild_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            reporter_id,
-            user_id,
-            user_display_name,
-            opponent_id,
-            opponent_display_name,
-            did_win,
-            datetime.datetime.now().isoformat(),
-            first_player,
-            match_time,
-            curiosa_link,  # Keep for backward compatibility
-            winner_deck_url or curiosa_link,
-            loser_deck_url,
-            match_comment,
-            json_deck_data_winner,  # Keep for backward compatibility
-            json_deck_data_winner,
-            json_deck_data_loser,
-            winner_elo_change,
-            loser_elo_change,
-            guild_id,
-        ),
-    )
+    if is_summit:
+        # Summit table has ELO columns
+        cur.execute(
+            f"INSERT INTO {table_name} (reporter_id, winner_id, winner_display_name, "
+            "losser_id, losser_display_name, did_win, timestamp, first_player, match_time, "
+            "curiosa_url, curiosa_url_winner, curiosa_url_loser, match_comment, "
+            "json_deck_data, json_deck_data_winner, json_deck_data_loser, winner_elo_change, loser_elo_change, guild_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                reporter_id,
+                user_id,
+                user_display_name,
+                opponent_id,
+                opponent_display_name,
+                did_win,
+                datetime.datetime.now().isoformat(),
+                first_player,
+                match_time,
+                curiosa_link,
+                winner_deck_url or curiosa_link,
+                loser_deck_url,
+                match_comment,
+                json_deck_data_winner,
+                json_deck_data_winner,
+                json_deck_data_loser,
+                winner_elo_change,
+                loser_elo_change,
+                guild_id,
+            ),
+        )
+    else:
+        # Non-Summit table has no ELO columns
+        cur.execute(
+            f"INSERT INTO {table_name} (reporter_id, winner_id, winner_display_name, "
+            "losser_id, losser_display_name, did_win, timestamp, first_player, match_time, "
+            "curiosa_url, curiosa_url_winner, curiosa_url_loser, match_comment, "
+            "json_deck_data, json_deck_data_winner, json_deck_data_loser, guild_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                reporter_id,
+                user_id,
+                user_display_name,
+                opponent_id,
+                opponent_display_name,
+                did_win,
+                datetime.datetime.now().isoformat(),
+                first_player,
+                match_time,
+                curiosa_link,
+                winner_deck_url or curiosa_link,
+                loser_deck_url,
+                match_comment,
+                json_deck_data_winner,
+                json_deck_data_winner,
+                json_deck_data_loser,
+                guild_id,
+            ),
+        )
 
     match_id = cur.lastrowid
     conn.commit()
@@ -312,17 +484,33 @@ async def losser_report(
     interaction_user_id,
     interaction_global,
     guild_id=None,
+    guild_name=None,
     winner_deck_url=None,
     loser_deck_url=None,
 ):
     """
     Log a loss in the database.
 
+    Args:
+        guild_id: The Discord guild ID
+        guild_name: The guild name (required for non-Summit servers)
+
     Returns:
         Tuple of (match_id, winner_id, loser_id)
     """
-    logger.info(f"Logging loss for user {interaction_global}")
-    create_db()
+    logger.info(f"Logging loss for user {interaction_global} in guild {guild_id}")
+
+    # Determine if this is Summit server (has ELO) or other server (no ELO)
+    is_summit = guild_id == SUMMIT_GUILD_ID
+
+    # Ensure the appropriate table exists
+    if is_summit:
+        create_db()
+        table_name = "match_records"
+    else:
+        create_server_match_table(guild_id, guild_name)
+        table_name = get_match_table_name(guild_id, guild_name)
+
     conn = sqlite3.connect("match_records.db")
     cur = conn.cursor()
 
@@ -340,44 +528,75 @@ async def losser_report(
         # Backward compatibility: if only one URL provided, assume it's loser's
         json_deck_data_loser = scrape_Curosa(curiosa_link, "deck_data_test.json")
 
-    # Update ELO and get the change values
-    new_elo, elo_change = update_elo_db(
-        interaction_user_id, interaction_global, did_win, opponent_id
-    )
-    # For losser_report, did_win is False so this is the loser's elo change
-    loser_elo_change = elo_change
-    winner_elo_change = (
-        -elo_change
-    )  # Approximate: winner gains roughly what loser loses
+    # Only update ELO for Summit server
+    winner_elo_change = None
+    loser_elo_change = None
+    if is_summit:
+        new_elo, elo_change = update_elo_db(
+            interaction_user_id, interaction_global, did_win, opponent_id
+        )
+        # For losser_report, did_win is False so this is the loser's elo change
+        loser_elo_change = elo_change
+        winner_elo_change = -elo_change  # Approximate: winner gains roughly what loser loses
 
-    cur.execute(
-        "INSERT INTO match_records (reporter_id, winner_id, winner_display_name, "
-        "losser_id, losser_display_name, did_win, timestamp, first_player, match_time, "
-        "curiosa_url, curiosa_url_winner, curiosa_url_loser, match_comment, "
-        "json_deck_data, json_deck_data_winner, json_deck_data_loser, winner_elo_change, loser_elo_change, guild_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            reporter_id,
-            user_id,
-            user_display_name,
-            opponent_id,
-            opponent_display_name,
-            did_win,
-            datetime.datetime.now().isoformat(),
-            first_player,
-            match_time,
-            curiosa_link,  # Keep for backward compatibility
-            winner_deck_url,
-            loser_deck_url or curiosa_link,
-            match_comment,
-            json_deck_data_loser,  # Keep for backward compatibility
-            json_deck_data_winner,
-            json_deck_data_loser,
-            winner_elo_change,
-            loser_elo_change,
-            guild_id,
-        ),
-    )
+    if is_summit:
+        # Summit table has ELO columns
+        cur.execute(
+            f"INSERT INTO {table_name} (reporter_id, winner_id, winner_display_name, "
+            "losser_id, losser_display_name, did_win, timestamp, first_player, match_time, "
+            "curiosa_url, curiosa_url_winner, curiosa_url_loser, match_comment, "
+            "json_deck_data, json_deck_data_winner, json_deck_data_loser, winner_elo_change, loser_elo_change, guild_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                reporter_id,
+                user_id,
+                user_display_name,
+                opponent_id,
+                opponent_display_name,
+                did_win,
+                datetime.datetime.now().isoformat(),
+                first_player,
+                match_time,
+                curiosa_link,
+                winner_deck_url,
+                loser_deck_url or curiosa_link,
+                match_comment,
+                json_deck_data_loser,
+                json_deck_data_winner,
+                json_deck_data_loser,
+                winner_elo_change,
+                loser_elo_change,
+                guild_id,
+            ),
+        )
+    else:
+        # Non-Summit table has no ELO columns
+        cur.execute(
+            f"INSERT INTO {table_name} (reporter_id, winner_id, winner_display_name, "
+            "losser_id, losser_display_name, did_win, timestamp, first_player, match_time, "
+            "curiosa_url, curiosa_url_winner, curiosa_url_loser, match_comment, "
+            "json_deck_data, json_deck_data_winner, json_deck_data_loser, guild_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                reporter_id,
+                user_id,
+                user_display_name,
+                opponent_id,
+                opponent_display_name,
+                did_win,
+                datetime.datetime.now().isoformat(),
+                first_player,
+                match_time,
+                curiosa_link,
+                winner_deck_url,
+                loser_deck_url or curiosa_link,
+                match_comment,
+                json_deck_data_loser,
+                json_deck_data_winner,
+                json_deck_data_loser,
+                guild_id,
+            ),
+        )
 
     match_id = cur.lastrowid
     conn.commit()
@@ -386,27 +605,49 @@ async def losser_report(
     return (match_id, user_id, opponent_id)
 
 
-def get_total_match_count():
-    """Get the total number of matches recorded in the database."""
+def get_total_match_count(guild_id: int = None, guild_name: str = None):
+    """
+    Get the total number of matches recorded in the database.
+
+    Args:
+        guild_id: Optional guild ID to filter by (None = Summit/global)
+        guild_name: Optional guild name (required for non-Summit servers)
+
+    Returns:
+        The match count
+    """
+    if guild_id is None or guild_id == SUMMIT_GUILD_ID:
+        table_name = "match_records"
+    else:
+        table_name = get_match_table_name(guild_id, guild_name)
+
     conn = sqlite3.connect("match_records.db")
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM match_records")
-    count = cur.fetchone()[0]
+
+    try:
+        cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+        count = cur.fetchone()[0]
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet
+        count = 0
+
     conn.close()
     return count
 
 
-def check_milestone(match_id):
+def check_milestone(match_id, guild_id: int = None, guild_name: str = None):
     """
     Check if the current match is a milestone (every 100 matches).
 
     Args:
         match_id: The ID of the just-recorded match
+        guild_id: Optional guild ID for server-specific milestone checking
+        guild_name: Optional guild name (required for non-Summit servers)
 
     Returns:
         int or None: The milestone number if this is a milestone match, None otherwise
     """
-    total_matches = get_total_match_count()
+    total_matches = get_total_match_count(guild_id, guild_name)
     if total_matches > 0 and total_matches % 100 == 0:
         return total_matches
     return None

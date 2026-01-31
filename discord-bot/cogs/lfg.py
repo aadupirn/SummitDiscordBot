@@ -70,7 +70,7 @@ def generate_milestone_message(count: int) -> str:
 
 
 async def send_milestone_announcement(
-    bot, winner_id: int, loser_id: int, match_id: int, guild_id: int = None
+    bot, winner_id: int, loser_id: int, match_id: int, guild_id: int = None, guild_name: str = None
 ):
     """
     Check if we hit a milestone and send an announcement if so.
@@ -81,8 +81,9 @@ async def send_milestone_announcement(
         loser_id: The ID of the losing player
         match_id: The match ID that was just recorded
         guild_id: The guild ID where the match was played
+        guild_name: The guild name (required for non-Summit servers)
     """
-    milestone = check_milestone(match_id)
+    milestone = check_milestone(match_id, guild_id, guild_name)
     if milestone:
         try:
             # Get milestone channel from server config, fall back to Summit default
@@ -163,7 +164,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
     )
 
     def __init__(
-        self, winner_id, winner_global, loser_id, loser_global, is_winner, bot, guild_id=None
+        self, winner_id, winner_global, loser_id, loser_global, is_winner, bot, guild_id=None, guild_name=None
     ):
         super().__init__()
         self.winner_id = winner_id
@@ -173,6 +174,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
         self.is_winner = is_winner
         self.bot = bot
         self.guild_id = guild_id or SUMMIT_GUILD_ID
+        self.guild_name = guild_name or "Sorcerers Summit"
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -205,6 +207,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
                 interaction_user_id,
                 interaction_global,
                 guild_id=self.guild_id,
+                guild_name=self.guild_name,
                 winner_deck_url=curiosa_link,
                 loser_deck_url=None,
             )
@@ -223,6 +226,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
                 interaction_user_id,
                 interaction_global,
                 guild_id=self.guild_id,
+                guild_name=self.guild_name,
                 winner_deck_url=None,
                 loser_deck_url=curiosa_link,
             )
@@ -235,7 +239,7 @@ class MatchReportModal(discord.ui.Modal, title="Match Report"):
         # Check for milestone and send announcement if needed
         if self.bot:
             await send_milestone_announcement(
-                self.bot, self.winner_id, self.loser_id, match_id, self.guild_id
+                self.bot, self.winner_id, self.loser_id, match_id, self.guild_id, self.guild_name
             )
 
 
@@ -263,6 +267,7 @@ class MatchConfirmationButtons(discord.ui.View):
         winner_deck_url: str = None,
         loser_deck_url: str = None,
         guild_id: int = None,
+        guild_name: str = None,
     ):
         super().__init__(timeout=86400)  # 24 hour timeout - plenty of time to confirm
         self.reporter_id = reporter_id
@@ -284,6 +289,7 @@ class MatchConfirmationButtons(discord.ui.View):
         self.winner_deck_url = winner_deck_url
         self.loser_deck_url = loser_deck_url
         self.guild_id = guild_id or SUMMIT_GUILD_ID
+        self.guild_name = guild_name or "Sorcerers Summit"
 
     @discord.ui.button(
         label="Confirm",
@@ -357,7 +363,7 @@ class MatchConfirmationButtons(discord.ui.View):
             combined_comment = f"{self.match_comment} | {combined_comment}"
 
         # Submit match report only ONCE (not twice)
-        # This will insert one record and update ELO for the winner
+        # This will insert one record and update ELO for the winner (Summit only)
         match_id, _, _ = await winner_report(
             self.reporter_id,  # reporter_id (who originally reported)
             self.winner_id,
@@ -372,14 +378,15 @@ class MatchConfirmationButtons(discord.ui.View):
             self.winner_id,  # interaction_user_id
             self.winner_global,  # interaction_global
             guild_id=self.guild_id,
+            guild_name=self.guild_name,
             winner_deck_url=self.winner_deck_url,
             loser_deck_url=self.loser_deck_url,
         )
 
-        # Update ELO for the loser as well
-        from utils.database import update_elo_db
-
-        update_elo_db(self.loser_id, self.loser_global, False, self.winner_id)
+        # Update ELO for the loser as well (Summit server only)
+        if self.guild_id == SUMMIT_GUILD_ID:
+            from utils.database import update_elo_db
+            update_elo_db(self.loser_id, self.loser_global, False, self.winner_id)
 
         # Remove the confirmation message
         await interaction.message.edit(
@@ -419,7 +426,7 @@ class MatchConfirmationButtons(discord.ui.View):
 
         # Check for milestone and send announcement if needed
         await send_milestone_announcement(
-            self.bot, self.winner_id, self.loser_id, match_id, self.guild_id
+            self.bot, self.winner_id, self.loser_id, match_id, self.guild_id, self.guild_name
         )
 
     @discord.ui.button(
@@ -574,6 +581,8 @@ class ReporterDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
                 match_start_time=view.match_start_time,
                 winner_deck_url=view.reporter_deck_url,
                 loser_deck_url=view.opponent_deck_url,
+                guild_id=view.guild_id,
+                guild_name=view.guild_name,
             )
 
             # Check if opponent has DM-disabled role
@@ -742,6 +751,8 @@ class ReporterDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
                 match_start_time=view.match_start_time,
                 winner_deck_url=view.opponent_deck_url,
                 loser_deck_url=view.reporter_deck_url,
+                guild_id=view.guild_id,
+                guild_name=view.guild_name,
             )
 
             # Check if opponent has DM-disabled role
@@ -909,7 +920,7 @@ class ConfirmerDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
         if view.match_comment:
             combined_comment = f"{view.match_comment} | {combined_comment}"
 
-        # Submit match report
+        # Submit match report (ELO updated inside for Summit server only)
         match_id, _, _ = await winner_report(
             view.reporter_id,
             view.winner_id,
@@ -924,14 +935,15 @@ class ConfirmerDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
             view.winner_id,
             view.winner_global,
             guild_id=view.guild_id,
+            guild_name=view.guild_name,
             winner_deck_url=view.winner_deck_url,
             loser_deck_url=view.loser_deck_url,
         )
 
-        # Update ELO for the loser
-        from utils.database import update_elo_db
-
-        update_elo_db(view.loser_id, view.loser_global, False, view.winner_id)
+        # Update ELO for the loser (Summit server only)
+        if view.guild_id == SUMMIT_GUILD_ID:
+            from utils.database import update_elo_db
+            update_elo_db(view.loser_id, view.loser_global, False, view.winner_id)
 
         # Update the confirmation message
         await original_interaction.message.edit(
@@ -970,7 +982,7 @@ class ConfirmerDeckURLModal(discord.ui.Modal, title="Enter Your Deck"):
 
         # Check for milestone
         await send_milestone_announcement(
-            view.bot, view.winner_id, view.loser_id, match_id, view.guild_id
+            view.bot, view.winner_id, view.loser_id, match_id, view.guild_id, view.guild_name
         )
 
 
@@ -1114,6 +1126,8 @@ class DeckURLModal(discord.ui.Modal, title="Join LFG Queue"):
                 match_start_time=match_start_time,
                 reporter_deck_url=reporter_deck_url,
                 opponent_deck_url=other_deck_url,
+                guild_id=guild_id,
+                guild_name=interaction.guild.name if interaction.guild else None,
             )
 
             # Build match message with deck info
@@ -1242,6 +1256,8 @@ class LFGReportButtons(discord.ui.View):
         match_start_time=None,
         reporter_deck_url=None,
         opponent_deck_url=None,
+        guild_id: int = None,
+        guild_name: str = None,
     ):
         super().__init__(timeout=None)
         self.match_id = match_id
@@ -1255,6 +1271,9 @@ class LFGReportButtons(discord.ui.View):
         self.channel = channel
         # Track when the match started for automatic match time calculation
         self.match_start_time = match_start_time or datetime.datetime.now()
+        # Server identification for multi-server support
+        self.guild_id = guild_id or SUMMIT_GUILD_ID
+        self.guild_name = guild_name or "Sorcerers Summit"
 
     @discord.ui.button(
         label="I Won!", style=discord.ButtonStyle.success, custom_id="win_button"
@@ -1338,6 +1357,8 @@ class LFGReportButtons(discord.ui.View):
                 match_start_time=self.match_start_time,
                 winner_deck_url=self.reporter_deck_url,  # Reporter won, so their deck is winner's
                 loser_deck_url=self.opponent_deck_url,  # Opponent lost, so their deck is loser's
+                guild_id=self.guild_id,
+                guild_name=self.guild_name,
             )
 
             # Check if opponent has DM-disabled role
@@ -1550,6 +1571,8 @@ class LFGReportButtons(discord.ui.View):
                 match_start_time=self.match_start_time,
                 winner_deck_url=self.opponent_deck_url,  # Opponent won, so their deck is winner's
                 loser_deck_url=self.reporter_deck_url,  # Reporter lost, so their deck is loser's
+                guild_id=self.guild_id,
+                guild_name=self.guild_name,
             )
 
             # Check if opponent has DM-disabled role
@@ -1888,6 +1911,8 @@ class ChallengeAcceptModal(discord.ui.Modal, title="Accept Challenge"):
             match_start_time=match_start_time,
             reporter_deck_url=reporter_deck_url,
             opponent_deck_url=other_deck_url,
+            guild_id=interaction.guild.id if interaction.guild else None,
+            guild_name=interaction.guild.name if interaction.guild else None,
         )
 
         # Build deck message
@@ -3238,18 +3263,20 @@ class LFGCog(commands.Cog):
                 winner.id,  # interaction_user_id
                 winner_name,  # interaction_global
                 guild_id=ctx.guild.id,
+                guild_name=ctx.guild.name,
                 winner_deck_url=None,
                 loser_deck_url=None,
             )
 
-            # Update ELO for the loser as well
-            update_elo_db(loser.id, loser_name, False, winner.id)
+            # Update ELO for the loser as well (Summit server only)
+            if ctx.guild.id == SUMMIT_GUILD_ID:
+                update_elo_db(loser.id, loser_name, False, winner.id)
 
             # Update leaderboard
             await self.update_leaderboard(ctx.guild.id)
 
             # Check for milestone and send announcement if needed
-            await send_milestone_announcement(self.bot, winner.id, loser.id, match_id, ctx.guild.id)
+            await send_milestone_announcement(self.bot, winner.id, loser.id, match_id, ctx.guild.id, ctx.guild.name)
 
             # Send confirmation
             success_embed = discord.Embed(
