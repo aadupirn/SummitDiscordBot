@@ -61,10 +61,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-  // Pass template variables to JavaScript
-  window.MATCH_ID = {{ match_id }};
-  window.PLAYER_ID = "{{ player_id }}";
+<script id="page-config" type="application/json">
+    { "matchId": {{ match_id | tojson }}, "playerId": {{ player_id | tojson }} }
 </script>
 <script src="{{ url_for('static', filename='js/pages/deck_snapshot.js') }}?v={{ app_version }}" defer></script>
 {% endblock %}

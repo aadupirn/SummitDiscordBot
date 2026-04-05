@@ -3,6 +3,11 @@
  * User Story 1: Track Life During Game
  */
 
+// ==================== Page Config ====================
+const _pageConfig = document.getElementById('page-config')
+  ? JSON.parse(document.getElementById('page-config').textContent)
+  : {};
+
 // ==================== State Management ====================
 
 const LifeCounterState = {
@@ -304,7 +309,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 function showMatchReportModal() {
   // Check if user is logged in
-  if (!window.LOGGED_IN) {
+  if (!_pageConfig.loggedIn) {
     alert("You must be logged in to report matches. Please log in with Discord or Google.");
     return;
   }
@@ -357,7 +362,7 @@ async function populateLcSeasonPicker() {
   select.innerHTML = '<option value="">No season</option>';
 
   try {
-    const userId = window.CURRENT_USER_ID;
+    const userId = _pageConfig.currentUserId;
     if (!userId) { group.style.display = "none"; return; }
     const res = await fetch(`/api/player/${userId}/seasons`, {credentials: "same-origin"});
     const data = await res.json();

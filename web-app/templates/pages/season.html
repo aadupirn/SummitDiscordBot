@@ -74,8 +74,8 @@
     </main>
     {% include 'components/footer.html' %}
     <script src="{{ url_for('static', filename='js/components/navbar.js') }}?v={{ app_version }}"></script>
-    <script>
-      const SEASON_ID = {{ season_id }};
+    <script id="page-config" type="application/json">
+        { "seasonId": {{ season_id | tojson }} }
     </script>
     <script src="{{ url_for('static', filename='js/pages/season.js') }}?v={{ app_version }}" defer></script>
   </body>

@@ -1,14 +1,12 @@
-/* Extracted from about.html */
-
 .content {
-  max-width: 800px;
+  max-width: 900px;
   margin: 0 auto;
   padding: 2rem;
 }
 
 .content h1 {
   font-size: 2.5rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
   color: var(--color-primary);
 }
 
@@ -16,17 +14,21 @@
   font-size: 1.8rem;
   margin-top: 2rem;
   margin-bottom: 1rem;
-  color: white;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.content h3 {
+  font-size: 1.3rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  color: #e0e0e0;
+  font-weight: 600;
 }
 
 .content p {
   margin-bottom: 1rem;
   line-height: 1.6;
-}
-
-.mission-section,
-.features-section {
-  color: white;
 }
 
 .content ul {
@@ -45,4 +47,10 @@
 
 .content a:hover {
   color: var(--color-secondary);
+}
+
+.last-updated {
+  font-style: italic;
+  color: var(--color-text-muted);
+  margin-bottom: 2rem;
 }

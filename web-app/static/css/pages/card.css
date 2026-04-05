@@ -1,0 +1,84 @@
+/* Extracted from card.html */
+
+.card-image-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  background: var(--color-bg-elevated, rgba(255, 255, 255, 0.05));
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+}
+.card-image-container img {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.card-image-container.site-card img {
+  transform: rotate(90deg);
+  max-width: 300px;
+}
+.loading-text {
+  text-align: center;
+  padding: 1.5rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+.stats-placeholder {
+  text-align: center;
+  padding: 3rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+  background: var(--color-bg-elevated, rgba(255, 255, 255, 0.05));
+  border-radius: 8px;
+  margin: 1.5rem 0;
+}
+.popularity-chart-section {
+  padding: 0;
+}
+.popularity-chart-wrapper {
+  padding: 1.5rem;
+  background: var(--color-bg-elevated, rgba(255, 255, 255, 0.05));
+  border-radius: 8px;
+}
+.popularity-chart-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.popularity-chart-controls label {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+.popularity-chart-controls input[type="range"] {
+  flex: 1;
+  max-width: 300px;
+}
+.popularity-chart-controls span {
+  font-weight: bold;
+  color: var(--primary, #2ecc71);
+  min-width: 50px;
+}
+.popularity-chart-container {
+  position: relative;
+  height: 300px;
+  margin-top: 1rem;
+}
+.normalize-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  user-select: none;
+}
+.normalize-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}

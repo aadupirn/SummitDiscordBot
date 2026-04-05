@@ -4,9 +4,11 @@
  * Description: Fetches and renders season members as a ranked leaderboard
  */
 
+const _pageConfig = JSON.parse(document.getElementById('page-config').textContent);
+
 async function fetchSeasonLeaderboard() {
   try {
-    const res = await fetch(`/api/seasons/${SEASON_ID}/members`);
+    const res = await fetch(`/api/seasons/${_pageConfig.seasonId}/members`);
     const data = await res.json();
 
     if (!data.success) {

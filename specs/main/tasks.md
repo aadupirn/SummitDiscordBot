@@ -1,114 +1,192 @@
-# Tasks: RealmsDraft ↔ Summit API Integration
+# Tasks: Extract Inline CSS/JS to Static Files
 
 **Input**: Design documents from `/specs/main/`
-**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/realmsdraft-api.md, quickstart.md
+**Prerequisites**: plan.md, research.md, quickstart.md
 
-**Tests**: Not explicitly requested. Manual curl testing described in quickstart.md.
+**Tests**: Not required. Manual visual inspection per quickstart.md verification steps.
 
-**Organization**: Tasks grouped by API endpoint (user story). Each endpoint can be tested independently once the setup phase is complete.
-
-**Context**: The Discord bot's limited arena system (database tables, repositories, services, match reporting, forfeit logic) is already fully implemented and tested (87+ tests passing). This task list covers ONLY the new web app API surface for RealmsDraft integration.
+**Organization**: Tasks grouped by extraction category. Category A (direct extraction) templates can be done in parallel. Category B (bridge pattern) templates are more complex and grouped separately. Each template extraction is independently verifiable.
 
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story this task belongs to (e.g., API1, API2, API3, API4)
+- **[CAT-A]**: Category A — Direct extraction (no Jinja2 in JS)
+- **[CAT-B]**: Category B — Bridge pattern extraction (Jinja2 variables in JS)
 - Include exact file paths in descriptions
 
 ---
 
-## Phase 1: Setup (Shared Infrastructure)
+## Phase 1: Category A — CSS-Only Extractions (Append to Existing Files)
 
-**Purpose**: Add API key config and authentication decorator needed by all endpoints
+**Purpose**: Extract inline `<style>` blocks from templates that already have corresponding external CSS files. Append the inline CSS to the bottom of the existing external file, then remove the `<style>` block from the template and ensure the template loads the external CSS file.
 
-- [ ] T001 [P] Add `REALMSDRAFT_API_KEY` config value to `web-app/webapp_config.py` — add `REALMSDRAFT_API_KEY = os.environ.get("REALMSDRAFT_API_KEY", "")` alongside existing secret config values, import `os` if not already imported
-- [ ] T002 [P] Create `web-app/utils/api_auth.py` with `@require_api_key` decorator — import `functools.wraps`, `flask.request`, `flask.jsonify`, and `webapp_config`; decorator checks `request.headers.get("X-API-Key")` against `webapp_config.REALMSDRAFT_API_KEY`, returns 401 JSON `{"success": false, "error": "Invalid API key"}` if missing or mismatched (see contract `realmsdraft-api.md` Authentication section for exact implementation)
+**Pattern**: For each task: (1) Read the template, copy the `<style>` block content, (2) Append it to the existing CSS file with a comment separator `/* Extracted from <template>.html */`, (3) Remove the `<style>` block from the template, (4) Ensure the template has a `<link>` tag referencing the CSS file via `{{ url_for('static', filename='...') }}?v={{ app_version }}`.
 
-**Checkpoint**: Auth decorator exists and can be imported. Config value is readable from environment.
+- [X] T001 [P] [CAT-A] Extract inline CSS from `web-app/templates/components/navbar.html` (~120 lines) → append to `web-app/static/css/components/navbar.css`. Remove the `<style>` block from `navbar.html`. The template already loads `navbar.css` via base.html.
+- [X] T002 [P] [CAT-A] Extract inline CSS from `web-app/templates/pages/index.html` (~40 lines of ELO source toggle styling) → append to `web-app/static/css/pages/index.css`. Remove the `<style>` block from `index.html`. Ensure the template loads `css/pages/index.css`.
+- [X] T003 [P] [CAT-A] Extract inline CSS from `web-app/templates/pages/login.html` (~8 lines of body gradient) → append to `web-app/static/css/pages/login.css`. Remove the `<style>` block from `login.html`. Ensure the template loads `css/pages/login.css`.
+- [X] T004 [P] [CAT-A] Extract inline CSS from `web-app/templates/pages/about.html` (~47 lines) → append to `web-app/static/css/pages/about.css`. Remove the `<style>` block from `about.html`. Ensure the template loads `css/pages/about.css`.
+- [X] T005 [P] [CAT-A] Extract inline CSS from `web-app/templates/pages/elements.html` (~72 lines of filter/badge styling) → append to `web-app/static/css/pages/elements.css`. Remove the `<style>` block from `elements.html`. Ensure the template loads `css/pages/elements.css`.
+- [X] T006 [P] [CAT-A] Extract inline CSS from `web-app/templates/pages/life_counter.html` (~127 lines of header/button/status styles) → append to `web-app/static/css/pages/life_counter.css`. Remove the `<style>` block from `life_counter.html`. Ensure the template loads `css/pages/life_counter.css`.
+- [X] T007 [P] [CAT-A] Extract inline CSS from `web-app/templates/errors/404.html` (~35 lines of error container styling) → append to `web-app/static/css/pages/error.css`. Remove the `<style>` block from `404.html`. Ensure the template loads `css/pages/error.css`.
+- [X] T008 [P] [CAT-A] Extract inline CSS from `web-app/templates/errors/500.html` (~35 lines, near-identical to 404) → deduplicate with 404 styles already appended in T007. Only add styles that differ (if any) to `web-app/static/css/pages/error.css`. Remove the `<style>` block from `500.html`. Ensure the template loads `css/pages/error.css`.
 
----
-
-## Phase 2: Foundational (Blueprint Registration)
-
-**Purpose**: Create the limited API blueprint skeleton and wire it into the Flask app
-
-**CRITICAL**: Must complete before any endpoint implementation
-
-- [ ] T003 Create `web-app/routes/api/limited.py` with empty Flask Blueprint — `limited_bp = Blueprint("limited", __name__)`, add imports for `flask.Blueprint`, `flask.jsonify`, `flask.request`, and the `require_api_key` decorator from `utils.api_auth`; also import from discord-bot layer: `repositories.limited_repo.get_active_arena_run`, `repositories.limited_repo.get_limited_elo`, `services.limited_service.start_arena_run`, `services.limited_service.forfeit_arena_run` (these are available because `app.py` adds `discord-bot/` to `sys.path`)
-- [ ] T004 Register `limited_bp` in `web-app/routes/api/__init__.py` — add `from routes.api.limited import limited_bp` and `api_bp.register_blueprint(limited_bp, url_prefix="/limited")` following the existing pattern (see `match_reporting_bp` and `curios_bp` registrations with url_prefix)
-
-**Checkpoint**: Blueprint registered. Server starts without errors. `GET /api/limited/` returns 404 (no routes yet).
+**Checkpoint**: 8 templates have `<style>` blocks removed. Existing CSS files have the extracted styles appended. All pages render identically.
 
 ---
 
-## Phase 3: API-US1 — GET User Status Endpoint (Priority: P1) MVP
+## Phase 2: Category A — CSS-Only Extractions (New Files)
 
-**Goal**: RealmsDraft can check a player's current limited arena run status, record, ELO, and queue eligibility
+**Purpose**: Extract inline `<style>` blocks from templates that do NOT have existing external CSS files. Create new CSS files.
 
-**Independent Test**: `curl -H "X-API-Key: <key>" http://localhost:5000/api/limited/user/123/status` returns JSON with `has_active_run`, `run`, `limited_elo`, and `can_queue` fields per contract
+**Pattern**: (1) Read the template, copy the `<style>` block content, (2) Create a new CSS file at the correct path, (3) Remove the `<style>` block from the template, (4) Add a `<link>` tag referencing the new CSS file via `{{ url_for('static', filename='...') }}?v={{ app_version }}`.
 
-### Implementation
+- [X] T009 [P] [CAT-A] Create `web-app/static/css/pages/privacy.css` with inline CSS extracted from `web-app/templates/pages/privacy.html` (~57 lines of content layout/typography). Remove the `<style>` block from `privacy.html`. Add `<link>` tag in `<head>`.
+- [X] T010 [P] [CAT-A] Create `web-app/static/css/pages/terms.css` with inline CSS extracted from `web-app/templates/pages/terms.html` (~57 lines, similar to privacy.html). Remove the `<style>` block from `terms.html`. Add `<link>` tag in `<head>`.
 
-- [ ] T005 [API1] Implement `GET /api/limited/user/<user_id>/status` in `web-app/routes/api/limited.py` — decorate with `@require_api_key`, call `get_active_arena_run(int(user_id))` to get active run dict (or None), call `get_limited_elo(int(user_id))` for current ELO. Build response per contract: `has_active_run` = True only if run exists and status is "active", `can_queue` = True only if active run with wins < 5 and losses < 3, `run` = most recent run dict (active or last completed/forfeited) or None if player has never played. If run exists, include: `run_id`, `deck_url`, `wins`, `losses`, `status`, `starting_elo`, `created_at`, and `completed_at` (if present). Return 200 with `jsonify()`.
-- [ ] T006 [API1] Handle edge case in GET status: player has no active run but has past runs — query `limited_arena_runs` for most recent run (any status) ordered by `created_at DESC LIMIT 1`. If `get_active_arena_run()` returns None, fall back to this query. Add `get_most_recent_run(user_id)` helper function in `web-app/routes/api/limited.py` or import from `repositories.limited_repo` if the function already exists (check `get_arena_run()` which takes `run_id` — may need a new repo function `get_latest_arena_run(user_id)` in `discord-bot/repositories/limited_repo.py` that queries by user_id ordered by created_at DESC LIMIT 1)
-
-**Checkpoint**: GET status endpoint returns correct JSON for: active run, completed run, no run history, invalid API key (401).
+**Checkpoint**: 2 new CSS files created. Templates load them correctly. Pages render identically.
 
 ---
 
-## Phase 4: API-US2 — POST Start/Forfeit Run Endpoint (Priority: P1)
+## Phase 3: Category A — CSS + JS Extractions (New Files, No Jinja2)
 
-**Goal**: RealmsDraft can start a new arena run with a deck URL, or forfeit the current active run using a flag
+**Purpose**: Extract both inline `<style>` and `<script>` blocks from templates where the JavaScript contains NO Jinja2 template variables. Create new CSS and JS files.
 
-**Independent Test**: `curl -X POST -H "X-API-Key: <key>" -H "Content-Type: application/json" -d '{"deck_url":"https://curiosa.io/decks/abc","display_name":"Test"}' http://localhost:5000/api/limited/user/123/run` returns 201 with new run. `curl -X POST ... -d '{"forfeit":true}' .../run` returns 200 with forfeited run + penalty summary.
+**Pattern**: (1) Copy `<style>` content → new CSS file, (2) Copy `<script>` content → new JS file, (3) Remove both blocks from template, (4) Add `<link>` for CSS and `<script src>` for JS with `{{ url_for('static', ...) }}?v={{ app_version }}`.
 
-### Implementation
+- [X] T011 [P] [CAT-A] Extract CSS and JS from `web-app/templates/components/streaming_banner.html`:
+  - Create `web-app/static/css/components/streaming-banner.css` (~160 lines of banner/streamer card/animation styles)
+  - Create `web-app/static/js/components/streaming-banner.js` (~120 lines of streamer fetching/banner management IIFE)
+  - Remove both inline blocks from `streaming_banner.html`
+  - Add `<link>` and `<script src>` references in the template
+- [X] T012 [P] [CAT-A] Extract CSS and JS from `web-app/templates/pages/stats.html`:
+  - Create `web-app/static/css/pages/stats.css` (~147 lines of event container/grid/filter styles)
+  - Create `web-app/static/js/pages/stats.js` (~44 lines of filterEvents function and event listeners)
+  - Remove both inline blocks from `stats.html`
+  - Add `<link>` and `<script src>` references
+- [X] T013 [P] [CAT-A] Extract CSS and JS from `web-app/templates/pages/top_8.html`:
+  - Create `web-app/static/css/pages/top_8.css` (~133 lines of event cards/filter styles)
+  - Create `web-app/static/js/pages/top_8.js` (~44 lines of filterEvents function and event listeners)
+  - Remove both inline blocks from `top_8.html`
+  - Add `<link>` and `<script src>` references
+- [X] T014 [P] [CAT-A] Extract CSS and JS from `web-app/templates/pages/live_popular_cards.html`:
+  - Create `web-app/static/css/pages/live_popular_cards.css` (~300 lines of table/badge/bar/filter styles)
+  - Create `web-app/static/js/pages/live_popular_cards.js` (~575 lines of ELO toggle, sorting, filtering, rendering)
+  - Remove both inline blocks from `live_popular_cards.html`
+  - Add `<link>` and `<script src>` references
 
-- [ ] T007 [API2] Implement `POST /api/limited/user/<user_id>/run` in `web-app/routes/api/limited.py` — decorate with `@require_api_key`, parse JSON body with `request.get_json()`. Branch on `forfeit` flag:
-  - **If `forfeit: true`**: call `forfeit_arena_run(int(user_id))` from `services.limited_service`. If no active run, return 400 `{"success": false, "error": "No active run to forfeit"}`. On success, return 200 with `action: "forfeited"`, the forfeited run dict, updated `limited_elo`, and `penalty_summary` string from the forfeit function.
-  - **If no forfeit flag (new run)**: validate `deck_url` and `display_name` are present in body, return 400 if missing. Call `start_arena_run(int(user_id), display_name, deck_url)` from `services.limited_service`. If player already has active run, return 400 `{"success": false, "error": "Player already has an active run (run_id: X). Forfeit or complete it first."}`. On success, return 201 with `action: "created"`, new run dict, and `limited_elo`.
-- [ ] T008 [API2] Handle forfeit response formatting in POST /run — `forfeit_arena_run()` returns a summary string. Parse this to extract the ELO before/after for the `penalty_summary` field, and fetch the updated run dict by calling `get_arena_run(run_id)` after forfeit completes. Also fetch updated `limited_elo` via `get_limited_elo(user_id)` since it changed during forfeit.
-
-**Checkpoint**: POST /run creates new runs (201), forfeits active runs (200), rejects missing fields (400), rejects duplicate active runs (400), rejects forfeit with no active run (400), rejects invalid API key (401).
-
----
-
-## Phase 5: API-US3 — POST End Run Endpoint (Priority: P1)
-
-**Goal**: RealmsDraft can force-end a player's current run (e.g., user abandons draft session), applying remaining losses as ELO penalties
-
-**Independent Test**: `curl -X POST -H "X-API-Key: <key>" http://localhost:5000/api/limited/user/123/end-run` returns 200 with forfeited run, `losses_applied` count, and `penalty_summary`.
-
-### Implementation
-
-- [ ] T009 [API3] Implement `POST /api/limited/user/<user_id>/end-run` in `web-app/routes/api/limited.py` — decorate with `@require_api_key`. Get active run via `get_active_arena_run(int(user_id))`. If no active run, return 400 `{"success": false, "error": "No active run to end"}`. Calculate `losses_applied = 3 - run["losses"]`. Call `forfeit_arena_run(int(user_id))`. Fetch updated run and ELO. Return 200 with run dict (now status "forfeited"), `limited_elo`, `losses_applied` integer, and `penalty_summary` string per contract.
-
-**Checkpoint**: POST /end-run forfeits active run (200), returns correct `losses_applied` count, rejects when no active run (400), rejects invalid API key (401).
-
----
-
-## Phase 6: API-US4 — Discord Bot Queue Validation (Priority: P2)
-
-**Goal**: Discord bot validates that a player has an active arena run before allowing them to join the Limited queue, enforcing "can't join if you don't have an active deck and you meet the win loss requirements"
-
-**Independent Test**: Try to join limited queue without an active run — bot rejects with message. Start a run via API, then join — bot accepts. Complete a run (5W or 3L), try to join again — bot rejects.
-
-### Implementation
-
-- [ ] T010 [API4] Update limited queue join validation in `discord-bot/cogs/lfg/queue.py` — when `queue_type == "limited"`, before adding player to queue: call `get_active_arena_run(user_id)` from `repositories.limited_repo`. If no active run (None) or run status is not "active", send ephemeral error message: "You need an active arena run to join the Limited queue. Start one on RealmsDraft first." If active run exists but is completed (wins >= 5 or losses >= 3), send: "Your current run is complete. Start a new run on RealmsDraft to continue playing Limited." Only allow queue join if active run exists with `status == "active"` and `wins < 5` and `losses < 3`. Store `run_id` and `deck_url` from the active run into the queue entry dict.
-- [ ] T011 [API4] Remove the existing auto-create-run-on-queue-join logic in `discord-bot/cogs/lfg/queue.py` — the current code calls `start_arena_run()` when a player joins limited queue without an active run. This should now be removed since RealmsDraft is responsible for creating runs. Players MUST have a pre-existing active run (created via the POST /run API) before they can join the queue. Keep the `get_active_arena_run()` check but change the else-branch from auto-creating a run to rejecting the queue join.
-
-**Checkpoint**: Bot rejects limited queue join without active run. Bot accepts with active run. Run creation only happens via RealmsDraft API.
+**Checkpoint**: 4 templates fully extracted. 8 new static files created (4 CSS + 4 JS). All pages render and function identically.
 
 ---
 
-## Phase 7: Polish & Cross-Cutting Concerns
+## Phase 4: Category A — JS-Only Extractions (Append/Merge)
 
-**Purpose**: Error handling, logging, and validation hardening
+**Purpose**: Extract inline `<script>` blocks from templates that either have an existing external JS file (merge) or need their JS appended to a shared file.
 
-- [ ] T012 Add error handling wrapper to all 3 endpoints in `web-app/routes/api/limited.py` — wrap each endpoint body in try/except, catch `ValueError` (invalid user_id conversion), `sqlite3.Error` (database failures), and generic `Exception`. Return appropriate HTTP status (400 for ValueError, 500 for database/unexpected errors) with `{"success": false, "error": "<message>"}` format. Add `logging.getLogger(__name__)` and log errors at ERROR level.
-- [ ] T013 [P] Add request logging to `web-app/routes/api/limited.py` — log each incoming request at INFO level with method, path, user_id, and action taken (e.g., "GET status for user 123: active run found" or "POST run for user 123: new run created"). Use the existing logging pattern from `web-app/app.py`.
-- [ ] T014 Verify existing test suite still passes — run `pytest discord-bot/tests/ -v` from `discord-bot/` directory to confirm all 87+ existing tests still pass after the queue.py changes in T010-T011. No new test files needed since the API endpoints are tested manually via curl.
+- [X] T015 [P] [CAT-A] Extract inline JS from `web-app/templates/components/navbar.html` (2 IIFE blocks: streaming indicator ~115 lines + notification system ~35 lines) → append to `web-app/static/js/components/navbar.js`. Remove the inline `<script>` blocks from `navbar.html`. The template already loads `navbar.js` via base.html.
+- [X] T016 [P] [CAT-A] Extract inline JS from `web-app/templates/pages/admin_audit_log.html` (~420 lines of Chart.js dashboard code) → merge into `web-app/static/js/pages/admin_audit_log.js` (file exists — check if it already has content, append if so or replace if empty/placeholder). Remove the inline `<script>` block from `admin_audit_log.html`. Ensure the template loads `js/pages/admin_audit_log.js`.
+
+**Checkpoint**: 2 templates have inline `<script>` blocks removed. JS is in external files. Navbar streaming indicator and admin dashboard charts work correctly.
+
+---
+
+## Phase 5: Category B — Bridge Pattern: Simple Single-Variable Templates
+
+**Purpose**: Extract inline CSS and JS from templates where the JS uses a single Jinja2 variable. Use the JSON config bridge pattern (see research.md R-1).
+
+**Bridge Pattern**:
+In template — replace the `<script>` block with:
+```html
+<script id="page-config" type="application/json">
+  { "varName": {{ jinja_var | tojson }} }
+</script>
+<script src="{{ url_for('static', filename='js/pages/<page>.js') }}?v={{ app_version }}" defer></script>
+```
+In external JS — read config at top:
+```javascript
+const config = JSON.parse(document.getElementById('page-config').textContent);
+```
+
+- [X] T017 [P] [CAT-B] Extract CSS and JS from `web-app/templates/pages/card.html`:
+  - Append inline CSS (~85 lines) to `web-app/static/css/pages/card.css`
+  - Create `web-app/static/js/pages/card.js` with the inline JS (~315 lines). At the top, read `config.cardName` from `#page-config`. Replace the Jinja2 `{{ card_name }}` reference with `config.cardName`.
+  - In `card.html`: remove `<style>` block, replace `<script>` block with bridge JSON config `{ "cardName": {{ card_name | tojson }} }` + external `<script src>` tag.
+  - Ensure `card.html` loads `css/pages/card.css`.
+- [X] T018 [P] [CAT-B] Extract CSS and JS from `web-app/templates/pages/avatar.html`:
+  - Append inline CSS (~100 lines) to `web-app/static/css/pages/avatar.css`
+  - Create `web-app/static/js/pages/avatar.js` with the inline JS (~590 lines). At the top, read `config.avatarName` from `#page-config`. Replace the Jinja2 `{{ avatar_name }}` reference with `config.avatarName`.
+  - In `avatar.html`: remove `<style>` block, replace `<script>` block with bridge JSON config `{ "avatarName": {{ avatar_name | tojson }} }` + external `<script src>` tag.
+  - Ensure `avatar.html` loads `css/pages/avatar.css`.
+
+**Checkpoint**: `card.html` and `avatar.html` have no inline CSS/JS (except the small JSON config block). Pages load data correctly from the bridge config.
+
+---
+
+## Phase 6: Category B — Bridge Pattern: Conditional/Multi-Variable Templates
+
+**Purpose**: Extract inline CSS and JS from templates where the JS uses Jinja2 conditionals (`{% if %}`) or `| tojson` data injection. These need the bridge pattern plus careful handling of conditional script rendering.
+
+**Conditional Bridge Pattern**: For templates with `{% if data %}...{% endif %}` wrapping script blocks, the JSON config includes a flag and the data:
+```html
+{% if element_stats %}
+<script id="page-config" type="application/json">
+  { "hasElementStats": true, "elementStats": {{ element_stats | tojson }}, "hasCardData": {{ 'true' if card_data else 'false' }} }
+</script>
+{% endif %}
+```
+The external JS checks `config.hasElementStats` before running chart logic.
+
+- [X] T019 [P] [CAT-B] Extract CSS and JS from `web-app/templates/pages/avatars.html`:
+  - Append inline CSS (~175 lines) to `web-app/static/css/pages/avatars.css`
+  - Merge inline JS (~700 lines) into `web-app/static/js/pages/avatars.js` (file exists — read it first, then integrate the inline JS). The inline JS is wrapped in `{% if all_popularity %}...{% endif %}`. Use bridge: `{ "hasPopularity": true }` inside the conditional. In the external JS, check `config.hasPopularity` before running the popularity chart initialization.
+  - In `avatars.html`: remove `<style>` block, replace `<script>` block with conditional bridge config + external `<script src>` tag.
+  - Ensure `avatars.html` loads `css/pages/avatars.css`.
+- [X] T020 [P] [CAT-B] Extract CSS and JS from `web-app/templates/pages/stats_event.html`:
+  - Create `web-app/static/css/pages/stats_event.css` with inline CSS (~305 lines)
+  - Create `web-app/static/js/pages/stats_event.js` with inline JS (~113 lines). Handle two conditional blocks: `{% if element_stats %}` injects `{{ element_stats | tojson }}`, and `{% if card_data %}` wraps sorting logic. Use bridge config: `{ "elementStats": {{ element_stats | tojson }}, "hasCardData": {{ 'true' if card_data else 'false' }} }`.
+  - In `stats_event.html`: remove `<style>` blocks, replace `<script>` blocks with bridge config + external `<script src>` tag.
+  - Add `<link>` for `css/pages/stats_event.css`.
+- [X] T021 [P] [CAT-B] Extract CSS and JS from `web-app/templates/pages/top_8_event.html`:
+  - Create `web-app/static/css/pages/top_8_event.css` with inline CSS (~407 lines)
+  - Create `web-app/static/js/pages/top_8_event.js` with inline JS (~85 lines). Same conditional pattern as `stats_event.html`: `element_stats | tojson` and `card_data` conditional. Use identical bridge config pattern.
+  - In `top_8_event.html`: remove `<style>` blocks, replace `<script>` blocks with bridge config + external `<script src>` tag.
+  - Add `<link>` for `css/pages/top_8_event.css`.
+
+**Checkpoint**: 3 templates extracted with conditional bridge pattern. Charts and sorting still work when data is present, and pages degrade gracefully when data is absent.
+
+---
+
+## Phase 7: Category B — Bridge Pattern: player.html (Largest Template)
+
+**Purpose**: Extract inline CSS and JS from `player.html`, the most complex template with ~2500 lines of inline JS and 5 Jinja2 variables.
+
+- [X] T022 [CAT-B] Extract inline CSS from `web-app/templates/pages/player.html` (~200+ lines of spinner, table, pagination, ELO toggle styles) → create `web-app/static/css/pages/player.css`. Remove the `<style>` block from `player.html`. Add `<link>` tag loading `css/pages/player.css`.
+- [X] T023 [CAT-B] Extract inline JS from `web-app/templates/pages/player.html` (~2500+ lines) → create `web-app/static/js/pages/player.js`. Bridge config variables: `player_id`, `needs_display_name`, `default_display_name`, `logged_in`, `current_user_id`. In `player.html`, replace the `<script>` block with:
+  ```html
+  <script id="page-config" type="application/json">
+    {
+      "playerId": {{ player_id | tojson }},
+      "needsDisplayName": {{ needs_display_name | tojson }},
+      "defaultDisplayName": {{ default_display_name | tojson }},
+      "loggedIn": {{ logged_in | tojson }},
+      "currentUserId": {{ current_user_id | tojson }}
+    }
+  </script>
+  ```
+  In the external JS, read all 5 values from `config` object at the top. Replace all Jinja2 variable references throughout the ~2500 lines with the corresponding `config.*` values. Ensure the template loads `js/pages/player.js`.
+
+**Checkpoint**: `player.html` has no inline CSS/JS except the ~8-line JSON config block. Player profile page renders correctly with all interactive features working (display name editing, match history, ELO display, etc.).
+
+---
+
+## Phase 8: Verification & Cleanup
+
+**Purpose**: Verify all inline CSS/JS has been extracted and all pages still work.
+
+- [X] T024 Run grep across all templates for remaining `<style>` tags — execute `grep -r "<style" web-app/templates/` and verify zero results. If any `<style>` blocks remain, extract them following the same pattern.
+- [X] T025 Run grep across all templates for remaining inline `<script>` tags — execute `grep -r "<script>" web-app/templates/` and verify results only show: (a) `<script src=...>` external references, (b) `<script type="application/json" id="page-config">` bridge configs, and (c) CDN `<script>` tags (Chart.js, etc.). Flag any inline logic scripts that were missed.
+- [X] T026 Verify all new/modified CSS files are properly referenced — for each template modified in Phases 1-7, confirm the template has a `<link>` tag loading the correct CSS file with `?v={{ app_version }}` cache busting.
+- [X] T027 Verify all new/modified JS files are properly referenced — for each template modified in Phases 1-7, confirm the template has a `<script src>` tag loading the correct JS file with `?v={{ app_version }}` cache busting and `defer` attribute.
 
 ---
 
@@ -116,86 +194,92 @@
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: No dependencies — start immediately
-- **Foundational (Phase 2)**: Depends on Phase 1 (T001, T002) — needs config + auth decorator
-- **API-US1 (Phase 3)**: Depends on Phase 2 (T003, T004) — needs blueprint registered
-- **API-US2 (Phase 4)**: Depends on Phase 2 — can run in parallel with Phase 3
-- **API-US3 (Phase 5)**: Depends on Phase 2 — can run in parallel with Phases 3-4
-- **API-US4 (Phase 6)**: No dependency on Phases 3-5 (bot reads DB directly, doesn't call API)
-- **Polish (Phase 7)**: Depends on Phases 3-6 complete
+- **Phases 1-4 (Category A)**: No dependencies between them — all can start immediately and run in parallel
+- **Phases 5-7 (Category B)**: No dependencies between them — all can start immediately and run in parallel
+- **Phase 8 (Verification)**: Depends on ALL previous phases being complete
+- Within each phase, all tasks marked `[P]` can run in parallel
 
-### User Story Dependencies
+### Dependency Graph
 
 ```
-Phase 1 (Setup: config + auth)
-    └── Phase 2 (Blueprint skeleton + registration)
-           ├── Phase 3: API-US1 (GET status)     ─┐
-           ├── Phase 4: API-US2 (POST run/forfeit) ├── All 3 can run in parallel
-           └── Phase 5: API-US3 (POST end-run)   ─┘
-Phase 6: API-US4 (Bot queue validation) ← independent, can run anytime after Phase 1
-    └── Phase 7 (Polish) ← after all above complete
+┌───────────────────────────────────────────��─────────────┐
+│  All Category A tasks (Phases 1-4)                       │
+│  T001-T016 — all [P], no inter-dependencies              │
+│                                                          │
+│  All Category B tasks (Phases 5-7)                       │
+│  T017-T023 — all [P] except T022→T023 (same file)       │
+└────────────────────────┬──────────────────────────────���─┘
+                         │
+                         ▼
+              Phase 8: Verification
+              T024-T027 (sequential)
 ```
 
 ### Parallel Opportunities
 
-**Within Phase 1**: T001 and T002 can run in parallel (different files)
-**Phases 3, 4, 5**: All three endpoint implementations can run in parallel (same file but independent functions, no dependencies between them)
-**Phase 6 vs Phases 3-5**: Bot queue validation (T010-T011) is independent of web app API work — can run in parallel
-**Within Phase 7**: T012 and T013 can run in parallel (different concerns in same file)
+**Maximum parallelism**: Tasks T001-T021 can ALL run in parallel (each touches different template + different CSS/JS files). T022 and T023 are sequential (same template). That's up to 21 tasks running simultaneously.
 
----
-
-## Parallel Example: Endpoint Implementation
-
-```bash
-# After Phase 2 completes, launch all three endpoints in parallel:
-Task: "T005 [API1] Implement GET /api/limited/user/<user_id>/status in web-app/routes/api/limited.py"
-Task: "T007 [API2] Implement POST /api/limited/user/<user_id>/run in web-app/routes/api/limited.py"
-Task: "T009 [API3] Implement POST /api/limited/user/<user_id>/end-run in web-app/routes/api/limited.py"
-
-# Simultaneously, work on bot-side validation:
-Task: "T010 [API4] Update limited queue join validation in discord-bot/cogs/lfg/queue.py"
-```
+**Recommended batching** (if working sequentially):
+1. Phase 1 (T001-T008): Quick wins, 8 simple CSS appends
+2. Phase 2 (T009-T010): 2 new CSS files
+3. Phase 3 (T011-T014): 4 full CSS+JS extractions
+4. Phase 4 (T015-T016): 2 JS appends
+5. Phase 5 (T017-T018): 2 simple bridge templates
+6. Phase 6 (T019-T021): 3 conditional bridge templates
+7. Phase 7 (T022-T023): Largest single template
+8. Phase 8 (T024-T027): Final verification sweep
 
 ---
 
 ## Implementation Strategy
 
-### MVP First (GET Status Only)
+### MVP First (Phase 1 Only)
 
-1. Complete Phase 1: Setup (T001-T002)
-2. Complete Phase 2: Blueprint registration (T003-T004)
-3. Complete Phase 3: GET status endpoint (T005-T006)
-4. **STOP and VALIDATE**: RealmsDraft can call GET to check player status
-5. Deploy and verify with RealmsDraft team
+1. Complete Phase 1: 8 CSS-only appends (quickest wins, lowest risk)
+2. **STOP and VALIDATE**: Verify 8 pages render correctly
+3. Proves the extraction pattern works before tackling JS
 
 ### Incremental Delivery
 
-1. **MVP**: Phases 1-3 → RealmsDraft can read player status (GET)
-2. **Run management**: Phase 4 → RealmsDraft can create runs and forfeit (POST /run)
-3. **Run termination**: Phase 5 → RealmsDraft can force-end runs (POST /end-run)
-4. **Queue enforcement**: Phase 6 → Bot enforces "must have active run" rule
-5. **Hardening**: Phase 7 → Error handling, logging, regression check
+1. **Phases 1-2**: All CSS-only extractions (10 templates) → Zero-risk, CSS is straightforward
+2. **Phases 3-4**: Category A JS extractions (6 templates) → Medium risk, but no Jinja2 complications
+3. **Phases 5-6**: Simple + conditional bridge patterns (5 templates) → Higher risk, needs careful testing
+4. **Phase 7**: player.html (~2500 lines JS) → Highest risk, most complex single extraction
+5. **Phase 8**: Verification sweep → Confirms 100% extraction
 
 ### Total Task Count
 
-- **Phase 1 (Setup)**: 2 tasks
-- **Phase 2 (Foundational)**: 2 tasks
-- **Phase 3 (API-US1: GET status)**: 2 tasks
-- **Phase 4 (API-US2: POST run/forfeit)**: 2 tasks
-- **Phase 5 (API-US3: POST end-run)**: 1 task
-- **Phase 6 (API-US4: Bot queue validation)**: 2 tasks
-- **Phase 7 (Polish)**: 3 tasks
-- **Total**: 14 tasks
+- **Phase 1 (CSS append)**: 8 tasks
+- **Phase 2 (CSS new)**: 2 tasks
+- **Phase 3 (CSS+JS new)**: 4 tasks
+- **Phase 4 (JS append)**: 2 tasks
+- **Phase 5 (Bridge simple)**: 2 tasks
+- **Phase 6 (Bridge conditional)**: 3 tasks
+- **Phase 7 (Bridge player.html)**: 2 tasks
+- **Phase 8 (Verification)**: 4 tasks
+- **Total**: 27 tasks across 21 templates
 
-### Task Count per User Story
+### Task Count by Category
 
-| Story | Description | Tasks |
-|-------|-------------|-------|
-| Setup | Config + auth decorator | 2 |
-| Foundational | Blueprint + registration | 2 |
-| API-US1 | GET user status | 2 |
-| API-US2 | POST start/forfeit run | 2 |
-| API-US3 | POST end run | 1 |
-| API-US4 | Bot queue validation | 2 |
-| Polish | Error handling, logging, tests | 3 |
+| Category | Templates | Tasks | Risk |
+|----------|-----------|-------|------|
+| CAT-A: CSS-only append | 8 | 8 | Low |
+| CAT-A: CSS-only new | 2 | 2 | Low |
+| CAT-A: CSS+JS new | 4 | 4 | Low |
+| CAT-A: JS append/merge | 2 | 2 | Medium |
+| CAT-B: Simple bridge | 2 | 2 | Medium |
+| CAT-B: Conditional bridge | 3 | 3 | Medium-High |
+| CAT-B: Complex bridge (player) | 1 | 2 | High |
+| Verification | — | 4 | — |
+
+---
+
+## Notes
+
+- [P] tasks = different files, no dependencies
+- [CAT-A] = direct extraction, no Jinja2 in JS
+- [CAT-B] = bridge pattern needed, Jinja2 variables in JS
+- Bridge config blocks (`<script type="application/json">`) are the ONLY acceptable remaining inline scripts
+- Always preserve `?v={{ app_version }}` cache busting on new static file references
+- When appending to existing CSS files, add a comment separator: `/* Extracted from <template>.html */`
+- Commit after each phase for safe rollback

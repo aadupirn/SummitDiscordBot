@@ -14,42 +14,9 @@
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/components/footer.css') }}" />
-    <style>
-      .error-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        min-height: 60vh;
-        text-align: center;
-        padding: var(--spacing-2xl);
-      }
-
-      .error-code {
-        font-size: 8rem;
-        font-weight: 700;
-        color: var(--color-primary);
-        line-height: 1;
-        margin-bottom: var(--spacing-lg);
-      }
-
-      .error-title {
-        font-size: var(--font-size-2xl);
-        margin-bottom: var(--spacing-md);
-      }
-
-      .error-message {
-        color: var(--color-text-muted);
-        font-size: var(--font-size-lg);
-        margin-bottom: var(--spacing-xl);
-        max-width: 500px;
-      }
-
-      .error-actions {
-        display: flex;
-        gap: var(--spacing-md);
-      }
-    </style>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/pages/error.css') }}?v={{ app_version }}" />
   </head>
   <body>
     {% include 'components/navbar.html' %}

@@ -143,3 +143,53 @@
         height: 16px;
         cursor: pointer;
       }
+
+/* Extracted from avatar.html */
+      /* Matchup table styles */
+      #matchups-container table {
+        background: var(--color-bg-elevated, rgba(255, 255, 255, 0.02));
+      }
+      #matchups-container tbody tr:last-child {
+        border-bottom: none;
+      }
+      /* Win rate gradient colors (5 levels) */
+      #matchups-container .winrate-terrible {
+        color: #e74c3c; /* Red (0-40%) */
+      }
+      #matchups-container .winrate-poor {
+        color: #ff6b6b; /* Light red (41-50%) */
+      }
+      #matchups-container .winrate-good {
+        color: #90ee90; /* Light green (51-60%) */
+      }
+      #matchups-container .winrate-great {
+        color: #2ecc71; /* Normal green (61-70%) */
+      }
+      #matchups-container .winrate-excellent {
+        color: #00ff00; /* Bright green (70%+) */
+      }
+      /* Sortable table headers */
+      #matchups-container th.sortable {
+        cursor: pointer;
+        user-select: none;
+        position: relative;
+        padding-right: 24px;
+      }
+      #matchups-container th.sortable:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
+      #matchups-container th.sortable::after {
+        content: "\21C5";
+        position: absolute;
+        right: 8px;
+        opacity: 0.3;
+        font-size: 12px;
+      }
+      #matchups-container th.sortable.sort-asc::after {
+        content: "\25B2";
+        opacity: 1;
+      }
+      #matchups-container th.sortable.sort-desc::after {
+        content: "\25BC";
+        opacity: 1;
+      }

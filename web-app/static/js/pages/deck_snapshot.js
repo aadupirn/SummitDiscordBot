@@ -3,8 +3,9 @@
  * Displays a player's deck from a specific match
  */
 
-const matchId = window.MATCH_ID;
-const playerId = window.PLAYER_ID;
+const _pageConfig = JSON.parse(document.getElementById('page-config').textContent);
+const matchId = _pageConfig.matchId;
+const playerId = _pageConfig.playerId;
 
 /**
  * Get mana cost from various possible field names
