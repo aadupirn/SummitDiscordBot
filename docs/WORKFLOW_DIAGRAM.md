@@ -167,15 +167,11 @@ SummitDiscordBot/
 ├── 🌐 web-app/                      ← Flask web app
 │   └── [Web app files]
 │
-├── 🧠 SorceryAI/                    ← RAG system
-│   └── [AI system files]
-│
 └── ⚙️ .github/
     └── workflows/
         ├── pr-test-bot.yml          ← PR testing
         ├── deploy-bot.yml           ← Bot deployment
-        ├── deploy-web.yml           ← Web deployment
-        └── deploy-ai.yml            ← AI deployment
+        └── deploy-web.yml           ← Web deployment
 ```
 
 ---

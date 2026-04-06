@@ -10,7 +10,6 @@ A Flask web application providing leaderboards, statistics, match history, deck 
 - **Match Reports**: Web-based match reporting with deck validation
 - **REST API**: Comprehensive API for players, matches, cards, and statistics
 - **Discord OAuth**: Secure authentication via Discord
-- **Rules Assistant**: Integration with SorceryAI RAG system
 
 ## Prerequisites
 
@@ -63,7 +62,7 @@ DISCORD_REDIRECT_URI=http://localhost:5000/auth/discord/callback
 # Optional: Secret key for sessions (auto-generated in dev mode if not set)
 SECRET_KEY=your_secret_key_here
 
-# Optional: OpenAI API Key (for SorceryAI integration)
+# Optional: OpenAI API Key (for AI features)
 OPENAI_API_KEY=your_openai_api_key
 
 # Optional: External API keys (comma-separated)
@@ -352,8 +351,6 @@ SECRET_KEY=your_generated_key_here
 - **API Documentation**: [API_DOCUMENTATION.md](API_DOCUMENTATION.md)
 - **Tailwind CSS Guide**: [TAILWIND.md](TAILWIND.md)
 - **Discord Bot Setup**: [../discord-bot/README.md](../discord-bot/README.md)
-- **SorceryAI Setup**: [../SorceryAI/README.md](../SorceryAI/README.md)
-
 ## Contributing
 
 1. Fork the repository

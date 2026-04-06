@@ -25,10 +25,7 @@
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/components/footer.css') }}?v={{ app_version }}" />
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='css/components/chat.css') }}?v={{ app_version }}" />
-    <link
+<link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/pages/deck_help.css') }}?v={{ app_version }}" />
   </head>
@@ -82,39 +79,8 @@
         <h3>Meta Analysis</h3>
         <p>Coming soon: Current meta trends and popular deck archetypes</p>
 
-        <h2>Rules Assistant</h2>
-        <p>
-          Ask questions about Sorcery: Contested Realm rules and mechanics using
-          our AI-powered Rules Assistant! Take all of the answers with a grain
-          of salt and verify with official sources.
-        </p>
-
-        <div class="chat-container">
-          <div class="chat-messages" id="chatMessages">
-            <div class="chat-message assistant">
-              <div class="message-content">
-                <strong>Rules Assistant:</strong> Hello! Ask me any questions
-                about Sorcery: Contested Realm rules, card interactions, or game
-                mechanics.
-              </div>
-            </div>
-          </div>
-          <div class="chat-input-container">
-            <input
-              type="text"
-              id="chatInput"
-              class="chat-input"
-              placeholder="Ask a rules question... (e.g., 'How does Stealth work?')"
-              maxlength="500" />
-            <button id="sendButton" class="chat-send-btn">Send</button>
-          </div>
-          <div class="chat-loading hidden" id="chatLoading">
-            <span class="loading-spinner"></span> Thinking...
-          </div>
-        </div>
       </section>
     </main>    {% include 'components/footer.html' %}
 <script src="{{ url_for('static', filename='js/components/navbar.js') }}?v={{ app_version }}"></script>
-    <script src="{{ url_for('static', filename='js/components/chat.js') }}?v={{ app_version }}" defer></script>
   </body>
 </html>
