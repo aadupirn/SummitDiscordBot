@@ -1,246 +1,123 @@
-# Implementation Plan: Extract Inline CSS/JS to Static Files
+# Implementation Plan: Fun Stats Page
 
-**Branch**: `main` | **Date**: 2026-04-05 | **Spec**: Web app template cleanup
-**Input**: User request to extract inline CSS and JavaScript from all web app pages into proper static folder files.
+**Branch**: `main` | **Date**: 2026-04-08 | **Spec**: `specs/main/spec.md`
+**Input**: User request for a new "Fun Stats" web page with event filtering and community stats
 
 ## Summary
 
-Extract all inline `<style>` and `<script>` blocks from 21+ web app Jinja2 templates into external CSS/JS files in the existing `web-app/static/` folder structure. Templates with Jinja2 template variables in their inline JS require a bridging pattern (small inline data script + external logic).
+A new public-facing "Fun Stats" page for the web app that showcases entertaining community statistics: win streaks, most diverse players, most active players, biggest upsets, nemesis pairs, and more. The page reuses the event/source filter pattern from the avatar winrate page and is added to the hamburger sidebar menu. All data is read-only from existing `match_records`, `match_records_archive`, and `elo.db` tables — no schema changes required.
 
 ## Technical Context
 
-**Language/Version**: Python 3.x / Flask / Jinja2 (templates), CSS3, JavaScript ES6+
-**Primary Dependencies**: Flask, Jinja2, Chart.js (used in several pages)
-**Storage**: N/A (static assets only)
-**Testing**: Manual visual inspection, browser dev tools
-**Target Platform**: Web browsers (production behind Nginx + Cloudflare)
+**Language/Version**: Python 3.11+ (Flask backend), HTML/CSS/JS (Jinja2 templates)
+**Primary Dependencies**: Flask, SQLite3, Jinja2
+**Storage**: SQLite (`match_records.db`, `elo.db`) — read-only queries
+**Testing**: Manual browser testing + syntax/import verification
+**Target Platform**: Linux server (production), Windows (development)
 **Project Type**: Web application (Flask)
-**Constraints**: Must not break any existing page rendering or functionality
-**Scale/Scope**: ~21 templates with inline CSS/JS, ~37 templates total
+**Performance Goals**: Page load < 2s, API response < 1s
+**Constraints**: Discord's existing database schema — no writes, no migrations
+**Scale/Scope**: Single page with 1 route, 1 API blueprint, 1 template, 1 CSS, 1 JS
 
 ## Constitution Check
 
-*No project constitution defined. Proceeding with standard best practices.*
+*GATE: Constitution is a placeholder template — no project-specific gates defined. Proceeding with established codebase patterns.*
 
-- Follow existing naming conventions: `css/pages/<page>.css`, `js/pages/<page>.js`, `css/components/<component>.css`, `js/components/<component>.js`
-- Use existing `url_for('static', ...)` pattern with `?v={{ app_version }}` cache busting
-- Maintain the existing CSS layer architecture: vendor → base → utilities → components → pages
+The project follows these observed conventions:
+- **Routes pattern**: Page route in `pages.py`, API routes in `routes/api/` blueprint
+- **Template pattern**: Jinja2 templates in `templates/pages/`, extend `base.html`
+- **Database access**: Direct SQLite connections (no ORM), connections opened/closed per function
+- **Event filtering**: Query `events` table for metadata, filter `match_records` by timestamp range
+- **Navigation**: Sidebar links in `templates/components/navbar.html`
 
-## Research Findings
-
-### Existing Static Architecture (Already Well-Organized)
-
-```
-web-app/static/
-├── css/
-│   ├── base/        (variables, reset, typography, layout)
-│   ├── components/  (navbar, footer, buttons, forms, modals, etc.)
-│   ├── pages/       (one CSS per page - 20 files exist)
-│   ├── utilities/   (spacing, colors, flexbox, visibility)
-│   └── vendor/      (tailwind)
-├── js/
-│   ├── core/        (main.js - global init)
-│   ├── components/  (navbar, chat, deck-viewer, leaderboard, event-card)
-│   ├── pages/       (one JS per page - 14 files exist)
-│   └── utils/       (empty)
-└── images/
-```
-
-### Templates With Inline CSS/JS (Extraction Targets)
-
-#### Category A: Pure CSS/JS (No Jinja2 in scripts — direct extraction)
-
-| Template | Inline CSS | Inline JS | Existing External CSS | Existing External JS |
-|----------|-----------|----------|----------------------|---------------------|
-| `components/navbar.html` | ~120 lines | ~150 lines (2 IIFEs) | `css/components/navbar.css` ✅ | `js/components/navbar.js` ✅ |
-| `components/streaming_banner.html` | ~160 lines | ~120 lines | ❌ Need new | ❌ Need new |
-| `pages/index.html` | ~40 lines | None | `css/pages/index.css` ✅ | N/A |
-| `pages/login.html` | ~8 lines | None | `css/pages/login.css` ✅ | N/A |
-| `pages/about.html` | ~47 lines | None | `css/pages/about.css` ✅ | N/A |
-| `pages/elements.html` | ~72 lines | None | `css/pages/elements.css` ✅ | N/A |
-| `pages/stats.html` | ~147 lines | ~44 lines | ❌ Need new | ❌ Need new |
-| `pages/top_8.html` | ~133 lines | ~44 lines | ❌ Need new | ❌ Need new |
-| `pages/life_counter.html` | ~127 lines | ~6 lines (minimal) | `css/pages/life_counter.css` ✅ | N/A |
-| `pages/privacy.html` | ~57 lines | None | ❌ Need new | N/A |
-| `pages/terms.html` | ~57 lines | None | ❌ Need new | N/A |
-| `pages/admin_audit_log.html` | None | ~420 lines | `css/pages/admin_audit_log.css` ✅ | ❌ Need new |
-| `pages/live_popular_cards.html` | ~300 lines | ~575 lines | ❌ Need new | ❌ Need new |
-| `errors/404.html` | ~35 lines | None | `css/pages/error.css` ✅ | N/A |
-| `errors/500.html` | ~35 lines | None | `css/pages/error.css` ✅ | N/A |
-
-#### Category B: Jinja2 Variables in JS (Needs bridge pattern)
-
-| Template | Inline CSS | Inline JS | Jinja2 Vars in JS |
-|----------|-----------|----------|--------------------|
-| `pages/player.html` | ~200+ lines | ~2500+ lines | `player_id`, `needs_display_name`, `default_display_name`, `logged_in`, `current_user_id` |
-| `pages/avatar.html` | ~100 lines | ~590 lines | `avatar_name` |
-| `pages/avatars.html` | ~175 lines | ~700 lines | `{% if all_popularity %}` conditional block |
-| `pages/card.html` | ~85 lines | ~315 lines | `card_name` |
-| `pages/stats_event.html` | ~305 lines | ~113 lines | `element_stats \| tojson`, `card_data` conditional |
-| `pages/top_8_event.html` | ~407 lines | ~85 lines | `element_stats \| tojson`, `card_data` conditional |
-
-### Bridge Pattern for Jinja2 Variables
-
-For templates where inline JS uses Jinja2 template variables, we'll use the **data attribute + JSON config** pattern:
-
-**Before** (inline JS with Jinja2):
-```html
-<script>
-  const cardName = "{{ card_name }}";
-  // ... 300 lines of logic ...
-</script>
-```
-
-**After** (minimal inline config + external JS):
-```html
-<script id="page-config" type="application/json">
-  { "cardName": {{ card_name | tojson }} }
-</script>
-<script src="{{ url_for('static', filename='js/pages/card.js') }}?v={{ app_version }}" defer></script>
-```
-
-Then in the external JS:
-```javascript
-const config = JSON.parse(document.getElementById('page-config').textContent);
-const cardName = config.cardName;
-// ... rest of logic ...
-```
+All conventions will be followed.
 
 ## Project Structure
 
-### Documentation
+### Documentation (this feature)
+
 ```text
 specs/main/
 ├── plan.md              # This file
-├── research.md          # Phase 0 research (inline below)
-└── tasks.md             # Phase 2 output (generated by /speckit.tasks)
+├── research.md          # Phase 0 output
+├── data-model.md        # Phase 1 output
+├── quickstart.md        # Phase 1 output
+├── contracts/           # Phase 1 output
+│   └── fun-stats-api.md
+└── tasks.md             # Phase 2 output (NOT created by /speckit.plan)
 ```
 
-### Source Code (files to create/modify)
+### Source Code (repository root)
 
 ```text
 web-app/
-├── static/
-│   ├── css/
-│   │   ├── components/
-│   │   │   └── streaming-banner.css    # NEW - extracted from streaming_banner.html
-│   │   └── pages/
-│   │       ├── stats.css               # NEW - extracted from stats.html
-│   │       ├── stats_event.css         # NEW - extracted from stats_event.html
-│   │       ├── top_8.css               # NEW - extracted from top_8.html
-│   │       ├── top_8_event.css         # NEW - extracted from top_8_event.html
-│   │       ├── privacy.css             # NEW - extracted from privacy.html
-│   │       ├── terms.css               # NEW - extracted from terms.html
-│   │       ├── live_popular_cards.css   # NEW - extracted from live_popular_cards.html
-│   │       ├── player.css              # NEW - extracted from player.html
-│   │       ├── navbar.css              # APPEND - merge inline styles
-│   │       ├── index.css               # APPEND - merge inline styles
-│   │       ├── login.css               # APPEND - merge inline styles
-│   │       ├── about.css               # APPEND - merge inline styles
-│   │       ├── elements.css            # APPEND - merge inline styles
-│   │       ├── life_counter.css        # APPEND - merge inline styles
-│   │       ├── avatar.css              # APPEND - merge inline styles
-│   │       ├── avatars.css             # APPEND - merge inline styles
-│   │       ├── card.css                # APPEND - merge inline styles
-│   │       └── error.css               # APPEND - merge inline styles (404/500)
-│   └── js/
-│       ├── components/
-│       │   ├── navbar.js               # APPEND - merge inline JS IIFEs
-│       │   └── streaming-banner.js     # NEW - extracted from streaming_banner.html
-│       └── pages/
-│           ├── stats.js                # NEW - extracted from stats.html
-│           ├── top_8.js                # NEW - extracted from top_8.html
-│           ├── admin_audit_log.js      # REPLACE content - currently exists but inline JS also present
-│           ├── live_popular_cards.js    # NEW - extracted from live_popular_cards.html
-│           ├── player.js               # NEW - extracted (bridge pattern)
-│           ├── avatar.js               # NEW - extracted (bridge pattern)
-│           ├── avatars.js              # REPLACE content - merge inline + external
-│           ├── card.js                 # NEW - extracted (bridge pattern)
-│           ├── stats_event.js          # NEW - extracted (bridge pattern)
-│           └── top_8_event.js          # NEW - extracted (bridge pattern)
-│
+├── routes/
+│   ├── pages.py                    # ADD: /fun-stats route
+│   └── api/
+│       └── fun_stats.py            # NEW: Fun stats API blueprint
 ├── templates/
 │   ├── components/
-│   │   ├── navbar.html                 # MODIFY - remove inline <style> and <script>
-│   │   └── streaming_banner.html       # MODIFY - remove inline <style> and <script>
-│   ├── pages/
-│   │   ├── index.html                  # MODIFY - remove inline <style>
-│   │   ├── login.html                  # MODIFY - remove inline <style>
-│   │   ├── about.html                  # MODIFY - remove inline <style>
-│   │   ├── elements.html               # MODIFY - remove inline <style>
-│   │   ├── stats.html                  # MODIFY - remove inline <style> and <script>
-│   │   ├── stats_event.html            # MODIFY - remove inline <style> and <script>, add bridge
-│   │   ├── top_8.html                  # MODIFY - remove inline <style> and <script>
-│   │   ├── top_8_event.html            # MODIFY - remove inline <style> and <script>, add bridge
-│   │   ├── life_counter.html           # MODIFY - remove inline <style>
-│   │   ├── privacy.html                # MODIFY - remove inline <style>
-│   │   ├── terms.html                  # MODIFY - remove inline <style>
-│   │   ├── admin_audit_log.html        # MODIFY - remove inline <script>
-│   │   ├── live_popular_cards.html     # MODIFY - remove inline <style> and <script>
-│   │   ├── player.html                 # MODIFY - remove inline <style> and <script>, add bridge
-│   │   ├── avatar.html                 # MODIFY - remove inline <style> and <script>, add bridge
-│   │   ├── avatars.html                # MODIFY - remove inline <style> and <script>, add bridge
-│   │   └── card.html                   # MODIFY - remove inline <style> and <script>, add bridge
-│   └── errors/
-│       ├── 404.html                    # MODIFY - remove inline <style>
-│       └── 500.html                    # MODIFY - remove inline <style>
+│   │   └── navbar.html             # EDIT: Add "Fun Stats" link to sidebar
+│   └── pages/
+│       └── fun_stats.html          # NEW: Fun Stats page template
+└── static/
+    ├── css/pages/
+    │   └── fun-stats.css           # NEW: Page-specific styles
+    └── js/pages/
+        └── fun-stats.js            # NEW: Filter logic + API calls + rendering
 ```
 
-## Implementation Phases
+**Structure Decision**: Follows the existing web app convention — a page route, an API blueprint, a Jinja2 template, and page-specific CSS/JS.
 
-### Phase 1: Category A — Pure Extractions (No Jinja2 in JS)
+## Stats Breakdown
 
-These are straightforward: copy inline CSS/JS to external files, replace with `<link>`/`<script>` tags.
+### User-Requested Stats
 
-**Group 1a: CSS-only extractions (append to existing files)**
-1. `navbar.html` → append to `css/components/navbar.css`
-2. `index.html` → append to `css/pages/index.css`
-3. `login.html` → append to `css/pages/login.css`
-4. `about.html` → append to `css/pages/about.css`
-5. `elements.html` → append to `css/pages/elements.css`
-6. `life_counter.html` → append to `css/pages/life_counter.css`
-7. `errors/404.html` → append to `css/pages/error.css`
-8. `errors/500.html` → merge with 404 styles in `css/pages/error.css`
+| # | Stat | Description | Data Source |
+|---|------|-------------|-------------|
+| 1 | **Win Streaks** | Best all-time + current active win streak per player (top 10) | All matches ordered by timestamp, iterate tracking consecutive wins |
+| 2 | **Most Diverse Player** | Top 10 players who have played the most unique avatars | `json_deck_data_winner`/`json_deck_data_loser` → extract avatar name per match |
+| 3 | **Most Active Player** | Top 10 players by total games played | Count appearances as winner + loser |
 
-**Group 1b: CSS-only extractions (new files)**
-9. `privacy.html` → create `css/pages/privacy.css`
-10. `terms.html` → create `css/pages/terms.css`
+### Suggested Additional Stats
 
-**Group 1c: CSS + JS extractions (new files)**
-11. `streaming_banner.html` → create `css/components/streaming-banner.css` + `js/components/streaming-banner.js`
-12. `stats.html` → create `css/pages/stats.css` + `js/pages/stats.js`
-13. `top_8.html` → create `css/pages/top_8.css` + `js/pages/top_8.js`
-14. `live_popular_cards.html` → create `css/pages/live_popular_cards.css` + `js/pages/live_popular_cards.js`
+| # | Stat | Description | Data Source |
+|---|------|-------------|-------------|
+| 4 | **Biggest Upset** | Match where lower-rated player beat higher-rated player by largest ELO gap (shows both players, result, ELO delta) | `winner_elo_change` / `loser_elo_change` from match records |
+| 5 | **Nemesis Pairs** | Top 5 player pairs who have faced each other the most (shows matchup record) | Count matchups between `winner_id`/`losser_id` pairs |
+| 6 | **First Player Advantage** | Overall win rate when going first vs second | `winner_went_first` column analysis |
+| 7 | **Match Duration Stats** | Average, fastest, and longest match times | `match_time` column (minutes) |
+| 8 | **Most Improved** | Top 5 players with biggest cumulative ELO gain in the period | Sum of `winner_lifetime_elo_change` and `loser_lifetime_elo_change` per player |
+| 9 | **Ironman Streak** | Players with the most consecutive days containing at least one match | Timestamp analysis for daily activity |
 
-**Group 1d: JS-only extractions**
-15. `navbar.html` → append streaming/notification IIFEs to `js/components/navbar.js`
-16. `admin_audit_log.html` → move inline JS to `js/pages/admin_audit_log.js` (file exists but may need merging)
+## Implementation Approach
 
-### Phase 2: Category B — Bridge Pattern Extractions (Jinja2 in JS)
+### Backend (API)
 
-For each, extract CSS to external file, then apply the bridge pattern for JS.
+1. **New blueprint**: `fun_stats_bp` in `routes/api/fun_stats.py`
+2. **Single endpoint**: `GET /api/fun-stats` with optional `?event=<value>&source=<value>` query params
+3. **Filter logic**: Reuse the exact pattern from `avatars.py` — `_get_event_date_range()` for event→date mapping, `_collect_rows()` for table selection (current vs archive)
+4. **Streak computation**: Port the proven algorithm from `admin.py:516-563` (iterate chronological matches, track current/best per player)
+5. **Avatar diversity**: Use `_extract_avatar_from_deck()` pattern from `avatars.py:115-125` to parse JSON deck data
 
-1. `card.html` — Bridge var: `card_name`
-2. `avatar.html` — Bridge var: `avatar_name`
-3. `avatars.html` — Bridge vars: `all_popularity` (conditional)
-4. `stats_event.html` — Bridge vars: `element_stats`, `card_data` (conditional blocks)
-5. `top_8_event.html` — Bridge vars: `element_stats`, `card_data` (conditional blocks)
-6. `player.html` — Bridge vars: `player_id`, `needs_display_name`, `default_display_name`, `logged_in`, `current_user_id`
+### Frontend (Template + JS)
 
-### Phase 3: Template Cleanup & Verification
+1. **Template**: Extends `base.html`, includes filter bar (event + source dropdowns) matching avatar page pattern
+2. **JavaScript**: On filter change → fetch `/api/fun-stats?event=X&source=Y` → render stat cards
+3. **Layout**: Card-based grid layout — each stat gets a card with a title, icon, and ranked list or single value
+4. **Responsive**: 1-column mobile, 2-column tablet, 3-column desktop (CSS grid)
 
-1. Update all modified templates to load their new external CSS/JS files
-2. For standalone HTML templates (not using `{% extends "base.html" %}`), add `<link>` and `<script>` tags
-3. For base.html-extending templates, use `{% block styles %}` and `{% block scripts %}`
-4. Verify no `<style>` or inline `<script>` blocks remain (except bridge config scripts)
-5. Run a grep across all templates for remaining `<style>` tags to confirm complete extraction
+### Navigation
+
+1. **Sidebar**: Add `<a href="/fun-stats">Fun Stats</a>` link after "Element Winrates" in `navbar.html`
+2. **Public access**: No admin check required — visible to all users
 
 ## Complexity Tracking
 
-| Item | Notes |
-|------|-------|
-| Bridge pattern (6 templates) | More complex than direct extraction; requires careful variable mapping |
-| Existing external files overlap | Some pages already have external CSS/JS that needs merging, not overwriting |
-| Standalone vs base.html templates | ~25 templates are full HTML documents, not using base.html inheritance |
-| 404/500 error pages | Share similar styles — deduplicate into single `error.css` |
-| `player.html` | Largest inline JS (~2500 lines) with 5 Jinja2 variables — most complex bridge |
+> No constitution violations. Feature follows established patterns entirely.
+
+| Decision | Rationale |
+|----------|-----------|
+| Single API endpoint (not per-stat) | All stats share the same filter params and DB connections — one round-trip is simpler and faster |
+| Port admin streak logic (not import) | Admin code is tightly coupled to its UNION helpers — cleaner to adapt the algorithm in the new blueprint |
+| Client-side rendering | Matches the avatar page pattern — template provides skeleton, JS fills data from API |

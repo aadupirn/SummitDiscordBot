@@ -95,9 +95,9 @@ CURIO_EDITORS = [
 API_KEYS_ENV = os.environ.get("API_KEYS", os.environ.get("API_KEY", ""))
 VALID_API_KEYS = [key.strip() for key in API_KEYS_ENV.split(",") if key.strip()]
 
-# RealmsDraft API key for server-to-server limited arena endpoints
+# Draft Sorcery API key for server-to-server limited arena endpoints
 # d8396d08a94baea33331ec66709b5c7e3262928ff0d5ebdb1752bda9c21784d4
-REALMSDRAFT_API_KEY = os.environ.get("REALMSDRAFT_API_KEY", "")
+DRAFT_SORCERY_API_KEY = os.environ.get("DRAFT_SORCERY_API_KEY", os.environ.get("REALMSDRAFT_API_KEY", ""))
 
 # Event star ratings (1-3 stars)
 EVENT_RATINGS = {
@@ -157,3 +157,14 @@ EVENT_NAME_MAPPINGS = {
     "TTSLeagueS7topCut": "TTS League Season 7 Top Cut",
     "UnlandCup25": "Unland Cup 2025",
 }
+
+# Season date-range filters for match data filtering
+# These appear in event filter dropdowns alongside database events
+SEASON_FILTERS = [
+    {
+        "id": "season_gothic_1",
+        "name": "Gothic Season 1",
+        "start_date": "2026-01-03",
+        "end_date": "2026-02-03",
+    },
+]

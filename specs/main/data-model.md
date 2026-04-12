@@ -1,140 +1,168 @@
-# Data Model: Limited Queue (Arena Draft Mode) + RealmsDraft API
+# Data Model: Fun Stats Page
 
-## Existing Tables (Already Implemented in Discord Bot)
+## No New Tables Required
 
-All four limited tables already exist in `repositories/limited_repo.py` and are fully operational.
+This feature is **read-only**. All stats are computed from existing tables using SELECT queries. No schema changes, no new tables, no migrations.
 
-### `limited_arena_runs` (in `match_records.db`)
+## Existing Tables Used
 
-Tracks each player's arena run lifecycle (draft -> play -> complete/forfeit).
+### `match_records` (match_records.db) — Current Matches
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `run_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Unique run identifier |
-| `user_id` | INTEGER | NOT NULL | Discord user ID |
-| `user_display_name` | TEXT | NOT NULL | Display name at run start |
-| `deck_url` | TEXT | NOT NULL | Curiosa deck URL for this run |
-| `json_deck_data` | TEXT | | Scraped deck JSON (cached at run creation) |
-| `wins` | INTEGER | NOT NULL DEFAULT 0 | Current win count (max 5) |
-| `losses` | INTEGER | NOT NULL DEFAULT 0 | Current loss count (max 3) |
-| `starting_elo` | INTEGER | NOT NULL DEFAULT 1500 | Player's Limited ELO at run start (for forfeit calc) |
-| `status` | TEXT | NOT NULL DEFAULT 'active' | 'active', 'completed', 'forfeited' |
-| `created_at` | TEXT | NOT NULL | ISO timestamp of run creation |
-| `completed_at` | TEXT | | ISO timestamp of run completion/forfeit |
+| Column | Type | Used For |
+|--------|------|----------|
+| `match_id` | INTEGER PK | Unique match identifier |
+| `winner_id` | INTEGER | Player ID of winner |
+| `winner_display_name` | TEXT | Winner's display name |
+| `losser_id` | INTEGER | Player ID of loser (note: column typo is intentional) |
+| `losser_display_name` | TEXT | Loser's display name |
+| `timestamp` | TEXT | ISO datetime — used for event filtering by date range |
+| `match_time` | INTEGER | Duration in minutes — for match duration stats |
+| `json_deck_data_winner` | TEXT | JSON deck data — for avatar extraction (diversity stat) |
+| `json_deck_data_loser` | TEXT | JSON deck data — for avatar extraction (diversity stat) |
+| `winner_elo_change` | INTEGER | Per-match ELO delta — for biggest upset detection |
+| `loser_elo_change` | INTEGER | Per-match ELO delta — for biggest upset detection |
+| `winner_lifetime_elo_change` | INTEGER | Lifetime ELO change — for most improved calculation |
+| `loser_lifetime_elo_change` | INTEGER | Lifetime ELO change — for most improved calculation |
+| `winner_went_first` | TEXT | Who went first — for first player advantage stat |
+| `loser_went_first` | TEXT | Who went first — for first player advantage stat |
+| `source` | TEXT | Match source — for source filtering ("Discord", etc.) |
+| `match_type` | TEXT | "ranked" or "testing" — filter to ranked only |
 
-**Indexes**: `CREATE INDEX IF NOT EXISTS idx_limited_runs_user_status ON limited_arena_runs(user_id, status)`
+### `match_records_archive` (match_records.db) — Historical Matches
 
-**State Transitions**:
-```
-active -> completed  (when wins=5 or losses=3)
-active -> forfeited  (when player forfeits via DM button or RealmsDraft API)
-```
+Same schema as `match_records` plus:
 
-### `limited_match_records` (in `match_records.db`)
+| Column | Type | Used For |
+|--------|------|----------|
+| `archive_id` | INTEGER PK | Archive entry identifier |
+| `event_id` | INTEGER | Links to events table — for event-specific queries |
+| `original_match_id` | INTEGER | Original match ID reference |
+| `archived_at` | TEXT | When the match was archived |
 
-Stores confirmed limited match results. Mirrors `match_records` schema but for limited games.
+### `events` (elo.db) — Event Metadata
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `match_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Unique match identifier |
-| `reporter_id` | INTEGER | | Discord ID of reporting player |
-| `winner_id` | INTEGER | | Discord ID of winner |
-| `winner_display_name` | TEXT | | Winner's display name |
-| `loser_id` | INTEGER | | Discord ID of loser |
-| `loser_display_name` | TEXT | | Loser's display name |
-| `did_win` | BOOLEAN | | True if reporter won |
-| `timestamp` | TEXT | | ISO timestamp |
-| `first_player` | TEXT | | 'y'/'n' reporter went first |
-| `match_time` | INTEGER | | Duration in minutes |
-| `curiosa_url_winner` | TEXT | | Winner's deck URL |
-| `curiosa_url_loser` | TEXT | | Loser's deck URL |
-| `match_comment` | TEXT | | User notes |
-| `json_deck_data_winner` | TEXT | | Winner's deck JSON |
-| `json_deck_data_loser` | TEXT | | Loser's deck JSON |
-| `winner_elo_change` | INTEGER | | Winner's Limited ELO change |
-| `loser_elo_change` | INTEGER | | Loser's Limited ELO change |
-| `winner_went_first` | TEXT | | 'y'/'n' |
-| `loser_went_first` | TEXT | | 'y'/'n' |
-| `winner_run_id` | INTEGER | | FK to winner's arena run |
-| `loser_run_id` | INTEGER | | FK to loser's arena run |
+| Column | Type | Used For |
+|--------|------|----------|
+| `event_id` | INTEGER PK | Event identifier |
+| `event_name` | TEXT | Display name |
+| `start_date` | TEXT | ISO date — filter boundary |
+| `end_date` | TEXT | ISO date — filter boundary |
+| `is_active` | BOOLEAN | Whether event is currently running |
 
-### `limited_elo` (in `elo.db`)
+### `overall_standings` (elo.db) — Player ELO
 
-Separate ELO tracking for limited mode. Simple single-ELO system (no paper/event split).
+| Column | Type | Used For |
+|--------|------|----------|
+| `user_id` | INTEGER PK | Player ID |
+| `user_display_name` | TEXT | Display name (fallback for name resolution) |
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `user_id` | INTEGER | PRIMARY KEY | Discord user ID |
-| `user_display_name` | TEXT | | Current display name |
-| `elo` | INTEGER | NOT NULL DEFAULT 1500 | Current Limited ELO |
+## Computed Data Structures (API Response)
 
-### `limited_active_pairings` (in `match_records.db`)
+### Win Streaks
 
-Active pairings for limited matches. Same pattern as `active_pairings`.
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `pairing_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Unique pairing identifier |
-| `guild_id` | INTEGER | NOT NULL | Discord guild ID |
-| `player1_id` | INTEGER | NOT NULL | First player's Discord ID |
-| `player2_id` | INTEGER | NOT NULL | Second player's Discord ID |
-| `player1_deck_url` | TEXT | | Player 1's deck URL |
-| `player2_deck_url` | TEXT | | Player 2's deck URL |
-| `player1_run_id` | INTEGER | | FK to player 1's arena run |
-| `player2_run_id` | INTEGER | | FK to player 2's arena run |
-| `created_at` | TEXT | NOT NULL | ISO timestamp |
-| `status` | TEXT | NOT NULL DEFAULT 'active' | 'active', 'reported', 'expired', 'cancelled' |
-
-## No New Tables Required for RealmsDraft API
-
-The RealmsDraft API endpoints read/write the **same four tables** listed above. No schema changes needed. The web app accesses these tables via the discord-bot's repository and service layers (already on `sys.path` in `app.py`).
-
-## Entity Relationships
-
-```
-limited_arena_runs (1) --< limited_match_records (many)
-  via winner_run_id / loser_run_id
-
-limited_elo (1) ---- limited_arena_runs (many)
-  via user_id
-
-limited_active_pairings (1) ---- limited_match_records (1)
-  via pairing validation (not FK, same pattern as existing)
+```python
+{
+    "name": str,           # Player display name
+    "best_streak": int,    # All-time longest win streak
+    "current_streak": int  # Active win streak (0 if last match was a loss)
+}
 ```
 
-## API Data Flow
+### Most Diverse Players
 
-```
-RealmsDraft                    Summit Web App                    SQLite DBs
-    |                               |                                |
-    |-- GET /status --------------->|                                |
-    |                               |-- get_active_arena_run() ----->|
-    |                               |-- get_limited_elo() ---------->|
-    |                               |<------- run + elo data --------|
-    |<------ JSON response ---------|                                |
-    |                               |                                |
-    |-- POST /run (new deck) ------>|                                |
-    |                               |-- start_arena_run() ---------->|
-    |                               |<------- run_id ----------------|
-    |<------ JSON response ---------|                                |
-    |                               |                                |
-    |-- POST /run (forfeit) ------->|                                |
-    |                               |-- forfeit_arena_run() -------->|
-    |                               |<------- summary ---------------|
-    |<------ JSON response ---------|                                |
-    |                               |                                |
-    |-- POST /end-run ------------->|                                |
-    |                               |-- forfeit_arena_run() -------->|
-    |                               |<------- summary ---------------|
-    |<------ JSON response ---------|                                |
+```python
+{
+    "name": str,           # Player display name
+    "unique_avatars": int, # Count of distinct avatars used
+    "avatars": list[str]   # List of avatar names played
+}
 ```
 
-## Validation Rules
+### Most Active Players
 
-1. **Queue join**: `deck_url` must be non-empty for `queue_type="limited"`
-2. **Arena run**: Only ONE active run per `user_id` at any time
-3. **Run completion**: `wins >= 5 OR losses >= 3` triggers auto-completion
-4. **Forfeit**: Remaining losses = `3 - current_losses`, each applied sequentially against `starting_elo`
-5. **ELO**: Starts at 1500, K=32 constant (no dynamic K-factor for limited)
-6. **Pairing**: Same validation pattern as existing - must have active pairing before report accepted
-7. **API Auth**: All RealmsDraft endpoints require valid `X-API-Key` header
+```python
+{
+    "name": str,    # Player display name
+    "wins": int,    # Total wins in period
+    "losses": int,  # Total losses in period
+    "games": int    # Total games (wins + losses)
+}
+```
+
+### Biggest Upsets
+
+```python
+{
+    "winner_name": str,    # Underdog who won
+    "loser_name": str,     # Favorite who lost
+    "elo_change": int,     # Winner's ELO gain (higher = bigger upset)
+    "timestamp": str       # When it happened
+}
+```
+
+### Nemesis Pairs
+
+```python
+{
+    "player1_name": str,   # First player
+    "player2_name": str,   # Second player
+    "encounters": int,     # Total matches between them
+    "p1_wins": int,        # Player 1's wins
+    "p2_wins": int         # Player 2's wins
+}
+```
+
+### First Player Advantage
+
+```python
+{
+    "total_matches": int,         # Matches with first-player data
+    "first_player_wins": int,     # Times first player won
+    "first_player_win_rate": float # Percentage
+}
+```
+
+### Match Duration Stats
+
+```python
+{
+    "average_minutes": float,  # Mean match time
+    "fastest_minutes": int,    # Shortest match
+    "longest_minutes": int,    # Longest match
+    "total_with_data": int     # Matches that have time data
+}
+```
+
+### Most Improved Players
+
+```python
+{
+    "name": str,        # Player display name
+    "elo_change": int   # Net ELO gained in period
+}
+```
+
+### Ironman Streak
+
+```python
+{
+    "name": str,               # Player display name
+    "consecutive_days": int    # Longest run of consecutive days with matches
+}
+```
+
+## Query Patterns
+
+### Event Filtering
+
+All queries support optional event/date-range filtering:
+
+- **No filter (default)**: Query `match_records` only (current event data)
+- **Specific event**: Query `match_records_archive WHERE event_id = ?`
+- **"all"**: UNION of `match_records` + `match_records_archive`
+- **Season filter**: Query with `timestamp BETWEEN start_date AND end_date`
+- **Source filter**: Additional `WHERE source = ?` clause
+
+### Match Type Filter
+
+All queries include `WHERE match_type = 'ranked'` to exclude testing matches (where the column exists).

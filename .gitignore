@@ -1,3 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+
 # Ignore config files
 config.json
 config.js
@@ -40,6 +56,7 @@ discord-bot/test_data/
 web-app/curiosa-io-tools/
 
 # Tailwind CSS
+web-app/tailwindcss
 web-app/tailwindcss.exe
 web-app/tailwindcss-windows-x64.exe
 web-app/card_images/
@@ -59,6 +76,6 @@ discord-bot/pull_from_server/*
 DUAL_ELO_IMPLEMENTATION_SUMMARY.md
 GOOGLE_OAUTH_OVERFLOW_FIX.md
 OPPONENT_SEARCH_500_ERROR_FIX.md
-web-app/top-8-decks-by-event/Sorcerers Summit Gothic Season 2 3-18-2026/Sorcerers Summit Gothic Season 2 3-18-2026.json
-web-app/top-8-decks-by-event/Sorcerers Summit Gothic Season 2 3-18-2026/Sorcerers Summit Gothic Season 2 3-18-2026.csv
 specs/*
+specs/main/*
+

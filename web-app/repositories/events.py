@@ -2,11 +2,14 @@
 
 import json
 import csv
+import logging
 import re
 from pathlib import Path
 
 from webapp_config import TOP_8_DIR, EVENT_RATINGS
 from utils.formatting import format_event_name, extract_year_from_name
+
+logger = logging.getLogger(__name__)
 
 
 class EventRepository:
@@ -47,6 +50,127 @@ class EventRepository:
 
         return event_path
 
+    def _find_json_files(self, event_folder: str) -> dict:
+        """Find top8 and full JSON files for an event folder.
+
+        Returns dict with 'top8' and 'full' keys (Path or None), or None if invalid.
+        """
+        event_path = self._validate_event_folder(event_folder)
+        if event_path is None or not event_path.exists():
+            return None
+
+        json_files = list(event_path.glob("*.json"))
+        top8_json = None
+        full_json = None
+
+        for json_file in json_files:
+            if "top8" in json_file.name.lower() or "top 8" in json_file.name.lower():
+                top8_json = json_file
+            elif json_file.name.lower().startswith(event_folder.lower()):
+                full_json = json_file
+
+        return {"top8": top8_json, "full": full_json}
+
+    def reorder_event_decks(self, event_folder: str, table_type: str, new_order: list[int]) -> dict:
+        """Reorder decks in a JSON file by rearranging the array.
+
+        Args:
+            event_folder: The event folder name.
+            table_type: "top8" or "all" to select which JSON file.
+            new_order: List of original indices in their new positions.
+
+        Returns:
+            dict with "success" bool and optional "error" string.
+        """
+        files = self._find_json_files(event_folder)
+        if files is None:
+            return {"success": False, "error": "Event not found"}
+
+        if table_type == "top8":
+            json_path = files["top8"]
+        elif table_type == "all":
+            json_path = files["full"]
+        else:
+            return {"success": False, "error": "Invalid table type"}
+
+        if not json_path or not json_path.exists():
+            return {"success": False, "error": f"No {table_type} JSON file found"}
+
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to read {json_path}: {e}")
+            return {"success": False, "error": "Failed to read JSON file"}
+
+        # For top8, only reorder the first 8 entries
+        if table_type == "top8":
+            reorder_slice = data[:8]
+            remainder = data[8:]
+        else:
+            reorder_slice = data
+            remainder = []
+
+        # Validate order array
+        if len(new_order) != len(reorder_slice):
+            return {"success": False, "error": f"Order length {len(new_order)} doesn't match deck count {len(reorder_slice)}"}
+
+        if sorted(new_order) != list(range(len(reorder_slice))):
+            return {"success": False, "error": "Invalid order: must contain each index exactly once"}
+
+        # Apply reorder
+        reordered = [reorder_slice[i] for i in new_order]
+        new_data = reordered + remainder
+
+        try:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(new_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Failed to write {json_path}: {e}")
+            return {"success": False, "error": "Failed to save reordered data"}
+
+        return {"success": True}
+
+    def _get_order_file(self) -> Path:
+        """Get the path to the event order JSON file."""
+        return self._events_dir / "_event_order.json"
+
+    def _load_event_order(self) -> list[str] | None:
+        """Load the saved event order (list of folder names), or None if not set."""
+        order_file = self._get_order_file()
+        if not order_file.exists():
+            return None
+        try:
+            with open(order_file, "r", encoding="utf-8") as f:
+                order = json.load(f)
+            if isinstance(order, list):
+                return order
+        except Exception:
+            pass
+        return None
+
+    def save_event_order(self, folder_order: list[str]) -> dict:
+        """Save a custom event display order.
+
+        Args:
+            folder_order: List of event folder names in desired display order.
+
+        Returns:
+            dict with "success" bool and optional "error" string.
+        """
+        # Validate all entries are strings
+        if not all(isinstance(f, str) for f in folder_order):
+            return {"success": False, "error": "All entries must be strings"}
+
+        try:
+            with open(self._get_order_file(), "w", encoding="utf-8") as f:
+                json.dump(folder_order, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Failed to save event order: {e}")
+            return {"success": False, "error": "Failed to save event order"}
+
+        return {"success": True}
+
     def get_all_events(self) -> list[dict]:
         """Get all events with their metadata."""
         events = []
@@ -85,14 +209,19 @@ class EventRepository:
                 except Exception:
                     pass
 
-        # Sort by year descending
-        events.sort(
-            key=lambda e: (
-                extract_year_from_name(e["name"]) > 0,
-                extract_year_from_name(e["name"]),
-            ),
-            reverse=True,
-        )
+        # Use saved custom order if available, otherwise sort by year
+        saved_order = self._load_event_order()
+        if saved_order:
+            order_map = {name: i for i, name in enumerate(saved_order)}
+            events.sort(key=lambda e: order_map.get(e["folder"], len(saved_order)))
+        else:
+            events.sort(
+                key=lambda e: (
+                    extract_year_from_name(e["name"]) > 0,
+                    extract_year_from_name(e["name"]),
+                ),
+                reverse=True,
+            )
 
         return events
 

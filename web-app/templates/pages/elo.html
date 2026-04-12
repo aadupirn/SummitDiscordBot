@@ -13,7 +13,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components/footer.css') }}?v={{ app_version }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/pages/elo.css') }}?v={{ app_version }}" />
   </head>
-  <body>
+  <body class="md:ml-48">
     {% include 'components/navbar.html' %}
     <main>
 
@@ -98,6 +98,7 @@
             <th class="col-align-right">ELO</th>
             <th class="col-align-center">Mode</th>
             <th class="col-align-right">W/L</th>
+            <th class="col-align-right">Win %</th>
           </tr>
         </thead>
             <tbody id="lifetime-leaderboard-body">
